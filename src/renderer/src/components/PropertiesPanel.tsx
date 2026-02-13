@@ -163,9 +163,10 @@ function TextProps({
         <input
           type="number"
           className="prop-number"
-          value={seg.fontSize}
+          value={seg.fontSize.toFixed(1)}
           min={8}
           max={300}
+          step={0.1}
           onChange={(e) => onUpdate(seg.id, { fontSize: Number(e.target.value) })}
         />
       </div>
@@ -268,10 +269,10 @@ function TextProps({
           <input
             type="number"
             className="prop-number"
-            value={Math.round(seg.strokeWidth ?? 0)}
+            value={(seg.strokeWidth ?? 0).toFixed(1)}
             min={0}
             max={20}
-            step={1}
+            step={0.1}
             onChange={(e) => onUpdate(seg.id, { strokeWidth: Number(e.target.value) })}
           />
           <input
@@ -287,6 +288,19 @@ function TextProps({
             style={{ flex: 1 }}
           />
         </div>
+      </div>
+
+      <div className="prop-group">
+        <span className="prop-label">Line spacing</span>
+        <input
+          type="number"
+          className="prop-number"
+          value={(seg.lineSpacing ?? 1.2).toFixed(2)}
+          min={0.5}
+          max={4}
+          step={0.05}
+          onChange={(e) => onUpdate(seg.id, { lineSpacing: Number(e.target.value) })}
+        />
       </div>
 
       <div className="prop-group">

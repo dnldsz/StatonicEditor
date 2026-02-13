@@ -261,7 +261,7 @@ ipcMain.handle('export-video', async (event, project: any) => {
         : `${xPx}-(text_w/2)`
 
     const lines: string[] = seg.text.split('\n')
-    const lineHeight = Math.round(seg.fontSize * 1.2)
+    const lineHeight = Math.round(seg.fontSize * (seg.lineSpacing ?? 1.2))
     const totalH = lines.length * lineHeight
 
     lines.forEach((line, lineIdx) => {

@@ -29,6 +29,7 @@ export interface TextSegment {
   strokeWidth: number   // outline thickness in px (0 = none)
   strokeColor: string   // outline color hex
   textAlign: 'left' | 'center' | 'right'
+  lineSpacing: number   // CSS line-height multiplier, e.g. 1.2
 }
 
 export type Segment = VideoSegment | TextSegment

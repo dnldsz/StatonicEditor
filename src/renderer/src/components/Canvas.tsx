@@ -333,7 +333,7 @@ export default function Canvas({
                 userSelect: 'none',
                 whiteSpace: 'pre',
                 textAlign: seg.textAlign ?? 'center',
-                lineHeight: 1.2,
+                lineHeight: seg.lineSpacing ?? 1.2,
                 padding: '2px 4px'
               }}
               onMouseDown={(e) => startMoveDrag(e, seg.id, 'text', seg.x, seg.y)}

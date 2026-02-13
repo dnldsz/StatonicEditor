@@ -321,7 +321,8 @@ export default function App(): JSX.Element {
       italic: false,
       strokeWidth: 0,
       strokeColor: '#000000',
-      textAlign: 'center'
+      textAlign: 'center',
+      lineSpacing: 1.2
     }
     dispatch({ type: 'ADD_TEXT_SEGMENT', segment: seg, trackId })
     dispatch({ type: 'SET_SELECTED', id: seg.id })
