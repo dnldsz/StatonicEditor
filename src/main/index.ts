@@ -236,32 +236,56 @@ ipcMain.handle('export-video', async (event, project: any) => {
   const concatInputs = videoSegments.map((_, i) => `[v${i}]`).join('')
   filterParts.push(`${concatInputs}concat=n=${videoSegments.length}:v=1:a=0[vcat]`)
 
-  // Drawtext for each text segment
-  let currentIn = '[vcat]'
-  textSegments.forEach((seg, i) => {
+  // Drawtext for each text segment — one drawtext call per line for multiline support
+  const textLines: Array<{
+    escapedText: string; fontsize: number; hex: string
+    boldStr: string; strokeStr: string; xExpr: string
+    lineCenterY: number; startSec: number; endSec: number
+  }> = []
+
+  textSegments.forEach((seg) => {
     const startSec = seg.startUs / 1_000_000
     const endSec = (seg.startUs + seg.durationUs) / 1_000_000
     const xPx = Math.round(((seg.x + 1) / 2) * canvas.width)
     const yPx = Math.round(((1 - seg.y) / 2) * canvas.height)
-    const escaped = seg.text
-      .replace(/\\/g, '\\\\')
-      .replace(/'/g, "'\\\\\\''")
-      .replace(/:/g, '\\:')
-      .replace(/\n/g, '\\n')
     const hex = seg.color.replace('#', '')
-    const outLabel = i === textSegments.length - 1 ? '[vout]' : `[vt${i}]`
     const boldStr = seg.bold ? ':bold=1' : ''
     const strokeStr = (seg.strokeWidth ?? 0) > 0
       ? `:borderw=${seg.strokeWidth}:bordercolor=0x${(seg.strokeColor ?? '#000000').replace('#', '').toUpperCase()}`
       : ''
-    filterParts.push(
-      `${currentIn}drawtext=fontfile='${TIKTOK_FONT}':text='${escaped}':fontsize=${seg.fontSize}:fontcolor=0x${hex.toUpperCase()}${boldStr}${strokeStr}:x=${xPx}-(text_w/2):y=${yPx}-(text_h/2):enable='between(t,${startSec},${endSec})'${outLabel}`
-    )
-    currentIn = outLabel
+    // x expression respects textAlign (matching canvas preview)
+    const xExpr = (seg.textAlign ?? 'center') === 'left'
+      ? `${xPx}`
+      : (seg.textAlign ?? 'center') === 'right'
+        ? `${xPx}-text_w`
+        : `${xPx}-(text_w/2)`
+
+    const lines: string[] = seg.text.split('\n')
+    const lineHeight = Math.round(seg.fontSize * 1.2)
+    const totalH = lines.length * lineHeight
+
+    lines.forEach((line, lineIdx) => {
+      if (!line) return  // empty lines contribute spacing but need no drawtext call
+      const lineCenterY = Math.round(yPx - totalH / 2 + lineHeight * (lineIdx + 0.5))
+      const escapedText = line
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/:/g, '\\:')
+      textLines.push({ escapedText, fontsize: seg.fontSize, hex, boldStr, strokeStr, xExpr, lineCenterY, startSec, endSec })
+    })
   })
 
-  if (textSegments.length === 0) {
+  let currentIn = '[vcat]'
+  if (textLines.length === 0) {
     filterParts.push(`[vcat]null[vout]`)
+  } else {
+    textLines.forEach((tl, i) => {
+      const outLabel = i === textLines.length - 1 ? '[vout]' : `[vtl${i}]`
+      filterParts.push(
+        `${currentIn}drawtext=fontfile='${TIKTOK_FONT}':text='${tl.escapedText}':fontsize=${tl.fontsize}:fontcolor=0x${tl.hex.toUpperCase()}${tl.boldStr}${tl.strokeStr}:x=${tl.xExpr}:y=${tl.lineCenterY}-(text_h/2):enable='between(t,${tl.startSec},${tl.endSec})'${outLabel}`
+      )
+      currentIn = outLabel
+    })
   }
 
   const filterComplex = filterParts.join(';')
