@@ -482,3 +482,15 @@ textarea.prop-input {
   text-align: center;
   padding: 20px;
 }
+
+.prop-divider {
+  height: 1px;
+  background: #2a2a2a;
+  margin: 4px 0 16px;
+}
+
+.prop-sublabel {
+  font-size: 10px;
+  color: #666;
+  margin-bottom: 4px;
+}

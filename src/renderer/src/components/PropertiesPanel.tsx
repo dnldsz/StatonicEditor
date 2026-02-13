@@ -64,6 +64,40 @@ function ClipFilmstrip({ seg }: { seg: VideoSegment }): JSX.Element {
   )
 }
 
+// ── Alignment icons ───────────────────────────────────────────────────────────
+
+function AlignLeftIcon() {
+  return (
+    <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor">
+      <rect x="0" y="0" width="15" height="2" rx="1"/>
+      <rect x="0" y="4.5" width="9" height="2" rx="1"/>
+      <rect x="0" y="9" width="15" height="2" rx="1"/>
+    </svg>
+  )
+}
+
+function AlignCenterIcon() {
+  return (
+    <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor">
+      <rect x="0" y="0" width="15" height="2" rx="1"/>
+      <rect x="3" y="4.5" width="9" height="2" rx="1"/>
+      <rect x="0" y="9" width="15" height="2" rx="1"/>
+    </svg>
+  )
+}
+
+function AlignRightIcon() {
+  return (
+    <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor">
+      <rect x="0" y="0" width="15" height="2" rx="1"/>
+      <rect x="6" y="4.5" width="9" height="2" rx="1"/>
+      <rect x="0" y="9" width="15" height="2" rx="1"/>
+    </svg>
+  )
+}
+
+// ── Panel components ──────────────────────────────────────────────────────────
+
 interface PropertiesPanelProps {
   segment: Segment | null
   onUpdate: (id: string, patch: Partial<Segment>) => void
@@ -145,32 +179,67 @@ function TextProps({
   onUpdate: (id: string, patch: Partial<TextSegment>) => void
   onDelete: (id: string) => void
 }) {
+  const align = seg.textAlign ?? 'center'
+
   return (
     <div className="properties-panel">
-      <h3>Text Overlay</h3>
 
+      {/* ── Text content ──────────────────────────────────────────────── */}
       <div className="prop-group">
-        <span className="prop-label">Text</span>
         <textarea
           className="prop-input"
           value={seg.text}
+          rows={3}
           onChange={(e) => onUpdate(seg.id, { text: e.target.value })}
         />
       </div>
 
+      {/* ── Typography ────────────────────────────────────────────────── */}
       <div className="prop-group">
-        <span className="prop-label">Font size</span>
-        <input
-          type="number"
-          className="prop-number"
-          value={seg.fontSize.toFixed(1)}
-          min={8}
-          max={300}
-          step={0.1}
-          onChange={(e) => onUpdate(seg.id, { fontSize: Number(e.target.value) })}
-        />
+        <span className="prop-label">Typography</span>
+        <div className="prop-row">
+          <input
+            type="number"
+            className="prop-number"
+            style={{ flex: 1 }}
+            value={seg.fontSize.toFixed(1)}
+            min={8}
+            max={300}
+            step={1}
+            onChange={(e) => onUpdate(seg.id, { fontSize: Number(e.target.value) })}
+          />
+          <button
+            className={`btn btn-icon${seg.bold ? ' btn-active' : ''}`}
+            style={{ fontWeight: 700, fontFamily: 'inherit' }}
+            onClick={() => onUpdate(seg.id, { bold: !seg.bold })}
+            title="Bold"
+          >B</button>
+          <button
+            className={`btn btn-icon${seg.italic ? ' btn-active' : ''}`}
+            style={{ fontStyle: 'italic', fontFamily: 'Georgia, serif' }}
+            onClick={() => onUpdate(seg.id, { italic: !seg.italic })}
+            title="Italic"
+          >I</button>
+        </div>
       </div>
 
+      {/* ── Alignment ─────────────────────────────────────────────────── */}
+      <div className="prop-group">
+        <span className="prop-label">Alignment</span>
+        <div className="prop-row">
+          {([['left', <AlignLeftIcon />], ['center', <AlignCenterIcon />], ['right', <AlignRightIcon />]] as const).map(([a, icon]) => (
+            <button
+              key={a}
+              className={`btn btn-icon${align === a ? ' btn-active' : ''}`}
+              style={{ flex: 1 }}
+              onClick={() => onUpdate(seg.id, { textAlign: a })}
+              title={a}
+            >{icon}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Colour ────────────────────────────────────────────────────── */}
       <div className="prop-group">
         <span className="prop-label">Color</span>
         <div className="prop-row">
@@ -188,51 +257,76 @@ function TextProps({
         </div>
       </div>
 
+      {/* ── Outline ───────────────────────────────────────────────────── */}
       <div className="prop-group">
-        <span className="prop-label">Style</span>
+        <div className="prop-row" style={{ marginBottom: seg.strokeEnabled ? 6 : 0 }}>
+          <label className="prop-checkbox" style={{ flex: 1 }}>
+            <input
+              type="checkbox"
+              checked={seg.strokeEnabled ?? false}
+              onChange={(e) => onUpdate(seg.id, { strokeEnabled: e.target.checked })}
+            />
+            <span className="prop-label" style={{ margin: 0 }}>Outline</span>
+          </label>
+        </div>
+        {seg.strokeEnabled && (
+          <div className="prop-row">
+            <input
+              type="color"
+              className="color-swatch"
+              value={seg.strokeColor ?? '#000000'}
+              onChange={(e) => onUpdate(seg.id, { strokeColor: e.target.value })}
+            />
+            <input
+              className="prop-input"
+              value={seg.strokeColor ?? '#000000'}
+              onChange={(e) => onUpdate(seg.id, { strokeColor: e.target.value })}
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="prop-divider" />
+
+      {/* ── Timing ────────────────────────────────────────────────────── */}
+      <div className="prop-group">
+        <span className="prop-label">Timing</span>
         <div className="prop-row">
-          <label className="prop-checkbox">
+          <div style={{ flex: 1 }}>
+            <div className="prop-sublabel">Start</div>
             <input
-              type="checkbox"
-              checked={seg.bold}
-              onChange={(e) => onUpdate(seg.id, { bold: e.target.checked })}
+              type="number"
+              className="prop-number"
+              style={{ width: '100%' }}
+              value={(seg.startUs / 1e6).toFixed(2)}
+              step={0.1}
+              min={0}
+              onChange={(e) => onUpdate(seg.id, { startUs: Math.round(Number(e.target.value) * 1e6) })}
             />
-            Bold
-          </label>
-          <label className="prop-checkbox">
+          </div>
+          <div style={{ flex: 1 }}>
+            <div className="prop-sublabel">Duration</div>
             <input
-              type="checkbox"
-              checked={seg.italic}
-              onChange={(e) => onUpdate(seg.id, { italic: e.target.checked })}
+              type="number"
+              className="prop-number"
+              style={{ width: '100%' }}
+              value={(seg.durationUs / 1e6).toFixed(2)}
+              step={0.1}
+              min={0.1}
+              onChange={(e) => onUpdate(seg.id, { durationUs: Math.round(Number(e.target.value) * 1e6) })}
             />
-            Italic
-          </label>
+          </div>
         </div>
       </div>
 
-      <div className="prop-group">
-        <span className="prop-label">Alignment</span>
-        <div className="prop-row">
-          {(['left', 'center', 'right'] as const).map((align) => (
-            <button
-              key={align}
-              className={`btn btn-icon${(seg.textAlign ?? 'center') === align ? ' btn-active' : ''}`}
-              style={{ flex: 1, fontSize: 16 }}
-              onClick={() => onUpdate(seg.id, { textAlign: align })}
-              title={align}
-            >
-              {align === 'left' ? 'L' : align === 'center' ? 'C' : 'R'}
-            </button>
-          ))}
-        </div>
-      </div>
-
+      {/* ── Position ──────────────────────────────────────────────────── */}
       <div className="prop-group">
         <span className="prop-label">Position (X, Y)</span>
         <div className="prop-row">
           <input
             type="number"
             className="prop-number"
+            style={{ flex: 1 }}
             value={seg.x.toFixed(3)}
             step={0.01}
             min={-1}
@@ -242,6 +336,7 @@ function TextProps({
           <input
             type="number"
             className="prop-number"
+            style={{ flex: 1 }}
             value={seg.y.toFixed(3)}
             step={0.01}
             min={-1}
@@ -251,57 +346,7 @@ function TextProps({
         </div>
       </div>
 
-      <div className="prop-group">
-        <span className="prop-label">Start time (s)</span>
-        <input
-          type="number"
-          className="prop-number"
-          value={(seg.startUs / 1e6).toFixed(3)}
-          step={0.1}
-          min={0}
-          onChange={(e) => onUpdate(seg.id, { startUs: Math.round(Number(e.target.value) * 1e6) })}
-        />
-      </div>
-
-      <div className="prop-group">
-        <span className="prop-label">Outline</span>
-        <div className="prop-row">
-          <label className="prop-checkbox">
-            <input
-              type="checkbox"
-              checked={seg.strokeEnabled ?? false}
-              onChange={(e) => onUpdate(seg.id, { strokeEnabled: e.target.checked })}
-            />
-            Enabled
-          </label>
-          <input
-            type="color"
-            className="color-swatch"
-            value={seg.strokeColor ?? '#000000'}
-            onChange={(e) => onUpdate(seg.id, { strokeColor: e.target.value })}
-          />
-          <input
-            className="prop-input"
-            value={seg.strokeColor ?? '#000000'}
-            onChange={(e) => onUpdate(seg.id, { strokeColor: e.target.value })}
-            style={{ flex: 1 }}
-          />
-        </div>
-      </div>
-
-      <div className="prop-group">
-        <span className="prop-label">Duration (s)</span>
-        <input
-          type="number"
-          className="prop-number"
-          value={(seg.durationUs / 1e6).toFixed(3)}
-          step={0.1}
-          min={0.1}
-          onChange={(e) => onUpdate(seg.id, { durationUs: Math.round(Number(e.target.value) * 1e6) })}
-        />
-      </div>
-
-      <div className="prop-group">
+      <div className="prop-group" style={{ marginTop: 8 }}>
         <button
           className="btn btn-danger"
           style={{ width: '100%' }}

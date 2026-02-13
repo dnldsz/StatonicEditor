@@ -36,21 +36,19 @@ const handleStyle = (dir: HandleDir): React.CSSProperties => {
   }
 }
 
-function scaleSign(dir: HandleDir): number {
-  if (dir === 'se' || dir === 'e' || dir === 's') return 1
-  if (dir === 'nw' || dir === 'w' || dir === 'n') return -1
-  if (dir === 'ne') return 1
-  return -1  // sw
-}
-
 // ── drag state ─────────────────────────────────────────────────────────────
 
 type ScaleDragState = {
-  id: string; dir: HandleDir; startX: number; startY: number; previewScale: number
-} & (
-  | { kind: 'text'; origFontSize: number; origTextScale: number }
-  | { kind: 'video'; origClipScale: number; previewH: number }
-)
+  id: string
+  kind: 'text' | 'video'
+  dir: HandleDir
+  canvasLeft: number   // canvas rect.left at drag start (screen px)
+  canvasTop: number    // canvas rect.top at drag start (screen px)
+  centerX: number      // element center in canvas-space px
+  centerY: number
+  startDist: number    // initial cursor distance from element center (px)
+  origScale: number    // origTextScale or origClipScale
+}
 
 type MoveDragState = {
   id: string; startX: number; startY: number; origX: number; origY: number
@@ -176,36 +174,46 @@ export default function Canvas({
     e.stopPropagation()
     e.preventDefault()
     const rect = wrapperRef.current!.getBoundingClientRect()
-    const ps = rect.width / canvas.width
 
-    if (seg.type === 'text') {
-      const ts = seg as TextSegment
-      scaleDragRef.current = {
-        kind: 'text', id: seg.id, dir, startX: e.clientX, startY: e.clientY,
-        previewScale: ps, origFontSize: ts.fontSize, origTextScale: ts.textScale ?? 1
-      }
-    } else {
-      const vs = seg as VideoSegment
-      scaleDragRef.current = {
-        kind: 'video', id: seg.id, dir, startX: e.clientX, startY: e.clientY,
-        previewScale: ps, origClipScale: vs.clipScale ?? 1, previewH: rect.height
-      }
+    // Measure the element's bounding rect to find its center.
+    // The handle is a child of the element, so parentElement is the element itself.
+    const elEl = (e.currentTarget as HTMLElement).parentElement!
+    const elRect = elEl.getBoundingClientRect()
+    const centerX = (elRect.left + elRect.right) / 2 - rect.left
+    const centerY = (elRect.top + elRect.bottom) / 2 - rect.top
+
+    const startOffX = e.clientX - rect.left - centerX
+    const startOffY = e.clientY - rect.top - centerY
+    const startDist = Math.sqrt(startOffX ** 2 + startOffY ** 2)
+
+    const origScale = seg.type === 'text'
+      ? (seg as TextSegment).textScale ?? 1
+      : (seg as VideoSegment).clipScale ?? 1
+
+    scaleDragRef.current = {
+      id: seg.id,
+      kind: seg.type === 'text' ? 'text' : 'video',
+      dir,
+      canvasLeft: rect.left,
+      canvasTop: rect.top,
+      centerX,
+      centerY,
+      startDist: Math.max(startDist, 1),  // guard against divide-by-zero
+      origScale
     }
 
     const onMove = (me: MouseEvent) => {
       const drag = scaleDragRef.current
       if (!drag) return
-      const dx = me.clientX - drag.startX
-      const dy = me.clientY - drag.startY
-      const rawDiag = (Math.abs(dx) > Math.abs(dy) ? dx : -dy) * scaleSign(drag.dir)
+      const curOffX = me.clientX - drag.canvasLeft - drag.centerX
+      const curOffY = me.clientY - drag.canvasTop - drag.centerY
+      const curDist = Math.sqrt(curOffX ** 2 + curOffY ** 2)
+      const ratio = curDist / drag.startDist
 
       if (drag.kind === 'text') {
-        const newScale = Math.max(0.1, drag.origTextScale + rawDiag / (drag.origFontSize * drag.previewScale))
-        onUpdateSegment(drag.id, { textScale: newScale } as Partial<TextSegment>)
+        onUpdateSegment(drag.id, { textScale: Math.max(0.1, drag.origScale * ratio) } as Partial<TextSegment>)
       } else {
-        // rawDiag in screen pixels / previewH → delta clipScale
-        const newScale = Math.max(0.05, drag.origClipScale + rawDiag / drag.previewH)
-        onUpdateSegment(drag.id, { clipScale: newScale } as Partial<VideoSegment>)
+        onUpdateSegment(drag.id, { clipScale: Math.max(0.05, drag.origScale * ratio) } as Partial<VideoSegment>)
       }
     }
 
@@ -217,7 +225,7 @@ export default function Canvas({
 
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
-  }, [onUpdateSegment, canvas.width])
+  }, [onUpdateSegment])
 
   // ── render ─────────────────────────────────────────────────────────────────
 

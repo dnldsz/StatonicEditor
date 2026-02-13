@@ -358,7 +358,7 @@ export default function App(): JSX.Element {
       color: '#ffffff',
       bold: false,
       italic: false,
-      strokeEnabled: false,
+      strokeEnabled: true,
       strokeColor: '#000000',
       textAlign: 'center',
       textScale: 1
