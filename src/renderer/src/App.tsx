@@ -124,10 +124,49 @@ declare global {
       getVideoInfo: (filePath: string) => Promise<{ path: string; name: string; durationSec: number; width: number; height: number }>
       saveProject: (project: Project) => Promise<{ ok?: boolean; cancelled?: boolean; error?: string }>
       loadProject: () => Promise<Project | { error: string } | null>
-      exportVideo: (project: Project) => Promise<{ ok?: boolean; cancelled?: boolean; error?: string }>
+      saveTempPng: (dataUrl: string, filename: string) => Promise<string>
+      exportVideo: (project: Project, textOverlays: Array<{ path: string; startSec: number; endSec: number }>) => Promise<{ ok?: boolean; cancelled?: boolean; error?: string }>
       onExportProgress: (cb: (line: string) => void) => () => void
     }
   }
+}
+
+// Render a text segment to a transparent PNG at full canvas resolution.
+// Uses the browser's text engine so emoji and font fallback work correctly.
+async function renderTextToPng(seg: TextSegment, cw: number, ch: number): Promise<string> {
+  await document.fonts.ready
+  const canvas = document.createElement('canvas')
+  canvas.width = cw
+  canvas.height = ch
+  const ctx = canvas.getContext('2d')!
+
+  const effectiveSize = seg.fontSize * (seg.textScale ?? 1)
+  ctx.font = `${seg.italic ? 'italic ' : ''}${seg.bold ? 'bold ' : ''}${effectiveSize}px 'TikTokText', 'Apple Color Emoji', sans-serif`
+  ctx.textBaseline = 'middle'
+  ctx.textAlign = seg.textAlign ?? 'center'
+
+  const xPx = ((seg.x + 1) / 2) * cw
+  const yPx = ((1 - seg.y) / 2) * ch
+  const lines = seg.text.split('\n')
+  const lineHeight = effectiveSize
+  const totalH = lines.length * lineHeight
+
+  if (seg.strokeEnabled) {
+    ctx.strokeStyle = seg.strokeColor ?? '#000000'
+    ctx.lineWidth = effectiveSize * (6.9 / 97.0) * 2
+    ctx.lineJoin = 'round'
+    lines.forEach((line, i) => {
+      if (!line) return
+      ctx.strokeText(line, xPx, yPx - totalH / 2 + lineHeight * (i + 0.5))
+    })
+  }
+  ctx.fillStyle = seg.color
+  lines.forEach((line, i) => {
+    if (!line) return
+    ctx.fillText(line, xPx, yPx - totalH / 2 + lineHeight * (i + 0.5))
+  })
+
+  return canvas.toDataURL('image/png')
 }
 
 export default function App(): JSX.Element {
@@ -329,11 +368,21 @@ export default function App(): JSX.Element {
   }, [project, currentTimeSec])
 
   const handleExport = useCallback(async () => {
+    // Render text segments to PNGs in the browser first (preserves emoji + WYSIWYG)
+    const textOverlays: Array<{ path: string; startSec: number; endSec: number }> = []
+    for (const track of project.tracks) {
+      if (track.type !== 'text') continue
+      for (const seg of track.segments) {
+        const ts = seg as TextSegment
+        const dataUrl = await renderTextToPng(ts, project.canvas.width, project.canvas.height)
+        const path = await window.api.saveTempPng(dataUrl, `overlay_${ts.id}.png`)
+        textOverlays.push({ path, startSec: ts.startUs / 1e6, endSec: (ts.startUs + ts.durationUs) / 1e6 })
+      }
+    }
     const cleanup = window.api.onExportProgress((line) => {
-      // Could show in a status bar; for now just log
       console.log('[ffmpeg]', line)
     })
-    const result = await window.api.exportVideo(project)
+    const result = await window.api.exportVideo(project, textOverlays)
     cleanup()
     if (result.error) alert(`Export failed: ${result.error}`)
   }, [project])

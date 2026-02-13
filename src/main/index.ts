@@ -6,8 +6,6 @@ import { spawn } from 'child_process'
 // Use PNG for dock (more reliable in dev than .icns)
 const ICON_PATH = join(__dirname, '../../resources/icon.png')
 
-const TIKTOK_FONT =
-  '/Users/danieldsouza/Downloads/tiktok-text-display-cufonfonts/TikTokTextMedium.otf'
 
 function createWindow(): void {
   const preloadPath = join(__dirname, '../preload/index.mjs')
@@ -176,7 +174,15 @@ ipcMain.handle('get-video-info', async (_event, filePath: string) => {
   })
 })
 
-ipcMain.handle('export-video', async (event, project: any) => {
+ipcMain.handle('save-temp-png', async (_event, dataUrl: string, filename: string) => {
+  const tmpDir = app.getPath('temp')
+  const filePath = join(tmpDir, filename)
+  const base64 = dataUrl.replace(/^data:image\/png;base64,/, '')
+  writeFileSync(filePath, Buffer.from(base64, 'base64'))
+  return filePath
+})
+
+ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{ path: string; startSec: number; endSec: number }> = []) => {
   const { filePath } = await dialog.showSaveDialog({
     defaultPath: `${project.name ?? 'export'}.mp4`,
     filters: [{ name: 'MP4', extensions: ['mp4'] }]
@@ -185,13 +191,9 @@ ipcMain.handle('export-video', async (event, project: any) => {
 
   const { canvas, tracks } = project
   const videoSegments: any[] = []
-  const textSegments: any[] = []
-
   for (const track of tracks) {
     if (track.type === 'video') {
       for (const seg of track.segments) videoSegments.push(seg)
-    } else if (track.type === 'text') {
-      for (const seg of track.segments) textSegments.push(seg)
     }
   }
 
@@ -236,54 +238,21 @@ ipcMain.handle('export-video', async (event, project: any) => {
   const concatInputs = videoSegments.map((_, i) => `[v${i}]`).join('')
   filterParts.push(`${concatInputs}concat=n=${videoSegments.length}:v=1:a=0[vcat]`)
 
-  // Drawtext for each text segment — one drawtext call per line for multiline support
-  const textLines: Array<{
-    escapedText: string; fontsize: number; hex: string
-    boldStr: string; strokeStr: string; xExpr: string
-    lineCenterY: number; startSec: number; endSec: number
-  }> = []
-
-  textSegments.forEach((seg) => {
-    const startSec = seg.startUs / 1_000_000
-    const endSec = (seg.startUs + seg.durationUs) / 1_000_000
-    const xPx = Math.round(((seg.x + 1) / 2) * canvas.width)
-    const yPx = Math.round(((1 - seg.y) / 2) * canvas.height)
-    const hex = seg.color.replace('#', '')
-    const boldStr = seg.bold ? ':bold=1' : ''
-    const effectiveFontSize = seg.fontSize * (seg.textScale ?? 1)
-    const strokeStr = (seg.strokeEnabled ?? false)
-      ? `:borderw=${Math.round(effectiveFontSize * 6.9 / 97.0)}:bordercolor=0x${(seg.strokeColor ?? '#000000').replace('#', '').toUpperCase()}`
-      : ''
-    // x expression respects textAlign (matching canvas preview)
-    const xExpr = (seg.textAlign ?? 'center') === 'left'
-      ? `${xPx}`
-      : (seg.textAlign ?? 'center') === 'right'
-        ? `${xPx}-text_w`
-        : `${xPx}-(text_w/2)`
-
-    const lines: string[] = seg.text.split('\n')
-    const lineHeight = Math.round(effectiveFontSize)
-    const totalH = lines.length * lineHeight
-
-    lines.forEach((line, lineIdx) => {
-      if (!line) return  // empty lines contribute spacing but need no drawtext call
-      const lineCenterY = Math.round(yPx - totalH / 2 + lineHeight * (lineIdx + 0.5))
-      const escapedText = line
-        .replace(/\\/g, '\\\\')
-        .replace(/'/g, "\\'")
-        .replace(/:/g, '\\:')
-      textLines.push({ escapedText, fontsize: Math.round(effectiveFontSize), hex, boldStr, strokeStr, xExpr, lineCenterY, startSec, endSec })
-    })
-  })
+  // Text overlays: rendered to PNGs by the browser (supports emoji + WYSIWYG)
+  const pngInputArgs: string[] = []
+  for (const overlay of textOverlays) {
+    pngInputArgs.push('-loop', '1', '-i', overlay.path)
+  }
 
   let currentIn = '[vcat]'
-  if (textLines.length === 0) {
+  if (textOverlays.length === 0) {
     filterParts.push(`[vcat]null[vout]`)
   } else {
-    textLines.forEach((tl, i) => {
-      const outLabel = i === textLines.length - 1 ? '[vout]' : `[vtl${i}]`
+    textOverlays.forEach((overlay, i) => {
+      const inputIdx = videoSegments.length + i
+      const outLabel = i === textOverlays.length - 1 ? '[vout]' : `[vto${i}]`
       filterParts.push(
-        `${currentIn}drawtext=fontfile='${TIKTOK_FONT}':text='${tl.escapedText}':fontsize=${tl.fontsize}:fontcolor=0x${tl.hex.toUpperCase()}${tl.boldStr}${tl.strokeStr}:x=${tl.xExpr}:y=${tl.lineCenterY}-(text_h/2):enable='between(t,${tl.startSec},${tl.endSec})'${outLabel}`
+        `${currentIn}[${inputIdx}:v]overlay=0:0:enable='between(t,${overlay.startSec},${overlay.endSec})'${outLabel}`
       )
       currentIn = outLabel
     })
@@ -293,6 +262,7 @@ ipcMain.handle('export-video', async (event, project: any) => {
   const args = [
     '-y',
     ...inputs,
+    ...pngInputArgs,
     '-filter_complex', filterComplex,
     '-map', '[vout]',
     '-c:v', 'libx264',

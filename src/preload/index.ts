@@ -8,7 +8,8 @@ contextBridge.exposeInMainWorld('api', {
   saveProject: (project: any) => ipcRenderer.invoke('save-project', project),
   loadProject: () => ipcRenderer.invoke('load-project'),
   getVideoInfo: (filePath: string) => ipcRenderer.invoke('get-video-info', filePath),
-  exportVideo: (project: any) => ipcRenderer.invoke('export-video', project),
+  saveTempPng: (dataUrl: string, filename: string) => ipcRenderer.invoke('save-temp-png', dataUrl, filename),
+  exportVideo: (project: any, textOverlays: any[]) => ipcRenderer.invoke('export-video', project, textOverlays),
   onExportProgress: (cb: (line: string) => void) => {
     const handler = (_event: any, line: string) => cb(line)
     ipcRenderer.on('export-progress', handler)
