@@ -312,7 +312,7 @@ export default function App(): JSX.Element {
       durationUs: 3_000_000,
       x: 0,
       y: 0,
-      fontSize: 60,
+      fontSize: 120,
       color: '#ffffff',
       bold: false,
       italic: false,

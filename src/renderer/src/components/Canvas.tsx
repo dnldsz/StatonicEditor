@@ -1,4 +1,4 @@
-import React, { RefObject, useCallback, useRef, useState } from 'react'
+import React, { RefObject, useCallback, useEffect, useRef, useState } from 'react'
 import { Project, TextSegment } from '../types'
 
 interface CanvasProps {
@@ -62,11 +62,31 @@ export default function Canvas({
   const scaleDragRef = useRef<{
     id: string; dir: HandleDir; startX: number; startY: number
     origFontSize: number; origStrokeWidth: number
+    previewScale: number
   } | null>(null)
   const [snapGuide, setSnapGuide] = useState<{ x: boolean; y: boolean }>({ x: false, y: false })
+  const [previewWidth, setPreviewWidth] = useState(0)
 
   const { canvas } = project
   const aspect = canvas.width / canvas.height
+
+  // Track the rendered width of the canvas wrapper so text can scale with it
+  useEffect(() => {
+    const el = wrapperRef.current
+    if (!el) return
+    const observer = new ResizeObserver((entries) => {
+      const w = entries[0].contentRect.width
+      if (w > 0) setPreviewWidth(w)
+    })
+    observer.observe(el)
+    const w = el.getBoundingClientRect().width
+    if (w > 0) setPreviewWidth(w)
+    return () => observer.disconnect()
+  }, [])
+
+  // fontSize and strokeWidth are stored in canonical export pixels (1080-wide space).
+  // Scale them down to the current preview size for CSS rendering.
+  const previewScale = previewWidth > 0 ? previewWidth / canvas.width : 1
 
   // Visible text overlays at currentTimeSec
   const visibleTexts: TextSegment[] = []
@@ -126,7 +146,8 @@ export default function Canvas({
     e.preventDefault()
     scaleDragRef.current = {
       id: seg.id, dir, startX: e.clientX, startY: e.clientY,
-      origFontSize: seg.fontSize, origStrokeWidth: seg.strokeWidth
+      origFontSize: seg.fontSize, origStrokeWidth: seg.strokeWidth,
+      previewScale: wrapperRef.current!.getBoundingClientRect().width / canvas.width
     }
 
     const onMove = (me: MouseEvent) => {
@@ -134,7 +155,8 @@ export default function Canvas({
       if (!drag) return
       const dx = me.clientX - drag.startX
       const dy = me.clientY - drag.startY
-      const diag = (Math.abs(dx) > Math.abs(dy) ? dx : -dy) * scaleSign(drag.dir)
+      // Convert screen-pixel delta to canonical space before applying
+      const diag = ((Math.abs(dx) > Math.abs(dy) ? dx : -dy) * scaleSign(drag.dir)) / drag.previewScale
       const newSize = Math.max(8, Math.round(drag.origFontSize + diag * 0.5))
       const ratio = newSize / drag.origFontSize
       const newStroke = drag.origStrokeWidth * ratio  // keep as float for smooth scaling
@@ -223,14 +245,14 @@ export default function Canvas({
               style={{
                 position: 'relative',
                 display: 'inline-block',
-                fontSize: seg.fontSize,
+                fontSize: seg.fontSize * previewScale,
                 color: seg.color,
                 fontWeight: seg.bold ? 700 : 400,
                 fontStyle: seg.italic ? 'italic' : 'normal',
                 fontFamily: "'TikTokText', -apple-system, sans-serif",
-                // Double the width: paint-order:stroke fill hides the inner half,
-                // so we double to make the visible outside equal the user's value
-                WebkitTextStroke: seg.strokeWidth > 0 ? `${seg.strokeWidth * 2}px ${seg.strokeColor}` : undefined,
+                // fontSize/strokeWidth are in canonical export pixels; scale to preview.
+                // Double the stroke: paint-order:stroke fill hides the inner half.
+                WebkitTextStroke: seg.strokeWidth > 0 ? `${seg.strokeWidth * 2 * previewScale}px ${seg.strokeColor}` : undefined,
                 cursor: 'move',
                 userSelect: 'none',
                 whiteSpace: 'pre',
