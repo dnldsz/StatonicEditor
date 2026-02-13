@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- macOS squircle background: ~22% corner radius matches Apple's proportion -->
+  <rect x="0" y="0" width="1024" height="1024" rx="225" ry="225" fill="#c8f6d3"/>
+
+  <!-- Logo: original paths scaled from 30-unit space → 800×800 centered (112px padding each side) -->
+  <!-- transform chain: center-offset → scale(800/30) → undo original Inkscape translate(-105,-160) -->
+  <g transform="translate(112,112) scale(26.6667) translate(-105,-160)" fill="#040f2a">
+    <path d="m 121.76766,162.62525 -3.53568,3.53568 3.53568,3.53568 3.53569,-3.53568 z
+             m 0,7.07136 -7.071,7.07101 3.53568,3.53568 7.07101,-7.07101 z
+             m 3.53569,3.53568 3.53532,3.53532 3.53568,-3.53568 -3.53532,-3.53532 z
+             m 3.53532,3.53532 -7.07101,7.07101 3.53569,3.53568 7.071,-7.071 z
+             m -7.07101,7.07101 -3.53532,-3.53532 -3.53568,3.53568 3.53532,3.53532 z
+             m -7.071,-7.071 -3.53568,-3.53569 -3.53568,3.53568 3.53568,3.53569 z
+             m -3.53568,-3.53569 7.071,-7.071 -3.53532,-3.53532 -7.071,7.071 z"/>
+  </g>
+</svg>

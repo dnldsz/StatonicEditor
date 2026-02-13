@@ -1,13 +1,17 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, nativeImage } from 'electron'
 import { join } from 'path'
 import { readFileSync, writeFileSync } from 'fs'
 import { spawn } from 'child_process'
+
+const ICON_PATH = join(__dirname, '../../resources/icon.icns')
 
 const TIKTOK_FONT =
   '/Users/danieldsouza/Downloads/tiktok-text-display-cufonfonts/TikTokTextMedium.otf'
 
 function createWindow(): void {
   const preloadPath = join(__dirname, '../preload/index.mjs')
+
+  const icon = nativeImage.createFromPath(ICON_PATH)
 
   const win = new BrowserWindow({
     width: 1500,
@@ -16,12 +20,15 @@ function createWindow(): void {
     minHeight: 700,
     backgroundColor: '#1a1a1a',
     titleBarStyle: 'hiddenInset',
+    icon,
     webPreferences: {
       preload: preloadPath,
       sandbox: false,
       webSecurity: false // allow local file:// video URLs
     }
   })
+
+  if (app.dock) app.dock.setIcon(icon)
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
