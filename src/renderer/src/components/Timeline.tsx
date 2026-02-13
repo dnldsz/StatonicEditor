@@ -1,138 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Project, Segment, VideoSegment } from '../types'
+import React, { useEffect, useRef, useState } from 'react'
+import { Project, Segment } from '../types'
 
 const LABEL_W = 88
 const TRACK_H = 44
 const RULER_H = 28
-const FRAME_H = TRACK_H - 10   // 34px — thumbnail height inside the segment
 const SNAP_PX = 8               // snap within 8 screen pixels
-
-// ── Thumbnail extraction system ────────────────────────────────────────────
-// One video element per source file. Frames extracted serially per src using
-// a promise chain so seeks never race. Module-level so it survives re-renders.
-
-const frameCache = new Map<string, string>()  // key: `${src}|${t.toFixed(3)}`
-
-interface SrcState {
-  video: HTMLVideoElement
-  canvas: HTMLCanvasElement
-  ctx: CanvasRenderingContext2D
-  chain: Promise<void>
-}
-const srcStates = new Map<string, SrcState>()
-
-function getSrcState(src: string): SrcState {
-  if (srcStates.has(src)) return srcStates.get(src)!
-  const video = document.createElement('video')
-  video.muted = true
-  video.preload = 'metadata'
-  video.src = `file://${src}`
-  const canvas = document.createElement('canvas')
-  canvas.width = Math.round(FRAME_H * 9 / 16)  // 19px for 9:16 portrait
-  canvas.height = FRAME_H
-  const ctx = canvas.getContext('2d')!
-  const state: SrcState = { video, canvas, ctx, chain: Promise.resolve() }
-  srcStates.set(src, state)
-  return state
-}
-
-function requestFrame(src: string, timeSec: number, onFrame: (url: string) => void): void {
-  const key = `${src}|${timeSec.toFixed(3)}`
-  if (frameCache.has(key)) { onFrame(frameCache.get(key)!); return }
-
-  const state = getSrcState(src)
-  state.chain = state.chain.then(() => new Promise<void>((resolve) => {
-    // Double-check cache (may have been filled while queued)
-    if (frameCache.has(key)) { onFrame(frameCache.get(key)!); resolve(); return }
-
-    const { video, canvas, ctx } = state
-
-    const onSeeked = () => {
-      // Detect actual video dimensions on first frame and resize canvas
-      if (video.videoWidth > 0) {
-        const aspect = video.videoWidth / video.videoHeight
-        canvas.width = Math.round(FRAME_H * aspect)
-        canvas.height = FRAME_H
-      }
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-      const url = canvas.toDataURL('image/jpeg', 0.7)
-      frameCache.set(key, url)
-      onFrame(url)
-      resolve()
-    }
-
-    const onError = () => resolve()
-
-    video.addEventListener('seeked', onSeeked, { once: true })
-    video.addEventListener('error', onError, { once: true })
-
-    if (video.readyState >= 1) {
-      video.currentTime = Math.max(0, Math.min(timeSec, video.duration - 0.05))
-    } else {
-      video.addEventListener('loadedmetadata', () => {
-        video.currentTime = Math.max(0, Math.min(timeSec, video.duration - 0.05))
-      }, { once: true })
-      video.load()
-    }
-  }))
-}
-
-// ── ThumbnailStrip component ───────────────────────────────────────────────
-function ThumbnailStrip({ seg, widthPx }: { seg: VideoSegment; widthPx: number }): JSX.Element {
-  const [urlMap, setUrlMap] = useState<Map<string, string>>(() => new Map())
-
-  // Frame times to request — 1 frame per second of source, max 20
-  const frameTimes = useMemo(() => {
-    const sourceDur = seg.sourceDurationUs / 1e6
-    const count = Math.max(1, Math.min(20, Math.ceil(sourceDur)))
-    return Array.from({ length: count }, (_, i) =>
-      seg.sourceStartUs / 1e6 + (i + 0.5) / count * sourceDur
-    )
-  }, [seg.src, seg.sourceStartUs, seg.sourceDurationUs])
-
-  useEffect(() => {
-    let cancelled = false
-    for (const t of frameTimes) {
-      const key = `${seg.src}|${t.toFixed(3)}`
-      if (frameCache.has(key)) {
-        setUrlMap(prev => new Map(prev).set(key, frameCache.get(key)!))
-        continue
-      }
-      requestFrame(seg.src, t, (url) => {
-        if (!cancelled) setUrlMap(prev => new Map(prev).set(key, url))
-      })
-    }
-    return () => { cancelled = true }
-  }, [seg.src, seg.sourceStartUs, seg.sourceDurationUs])
-
-  // Tile frames to fill widthPx (first frame's actual width drives tile size)
-  const firstUrl = urlMap.get(`${seg.src}|${frameTimes[0]?.toFixed(3)}`)
-  const tileW = firstUrl
-    ? ((): number => {
-        // Read natural width from cache via canvas width for this src
-        const state = srcStates.get(seg.src)
-        return state ? state.canvas.width : Math.round(FRAME_H * 9 / 16)
-      })()
-    : Math.round(FRAME_H * 9 / 16)
-
-  const tilesNeeded = Math.ceil(widthPx / tileW) + 1
-
-  return (
-    <div style={{
-      position: 'absolute', top: 4, bottom: 4, left: 0, right: 0,
-      display: 'flex', overflow: 'hidden', pointerEvents: 'none'
-    }}>
-      {Array.from({ length: tilesNeeded }, (_, i) => {
-        const t = frameTimes[i % frameTimes.length]
-        const key = t !== undefined ? `${seg.src}|${t.toFixed(3)}` : ''
-        const url = urlMap.get(key)
-        return url
-          ? <img key={i} src={url} style={{ height: FRAME_H, width: tileW, flexShrink: 0, objectFit: 'cover' }} draggable={false} />
-          : <div key={i} style={{ width: tileW, height: FRAME_H, flexShrink: 0 }} />
-      })}
-    </div>
-  )
-}
 
 // ── Snap utilities ─────────────────────────────────────────────────────────
 function collectSnapPoints(project: Project, excludeId?: string): number[] {
@@ -399,10 +271,6 @@ export default function Timeline({
                     onClick={(e) => { e.stopPropagation(); onSelectSegment(seg.id) }}
                     onMouseDown={(e) => handleSegmentMouseDown(e, seg, 'move')}
                   >
-                    {/* Thumbnail strip (video segments only) */}
-                    {seg.type === 'video' && (
-                      <ThumbnailStrip seg={seg as VideoSegment} widthPx={width} />
-                    )}
                     <div className="resize-handle resize-handle-left" onMouseDown={(e) => handleSegmentMouseDown(e, seg, 'resize-left')} />
                     <span className="segment-label">{label}</span>
                     <div className="resize-handle resize-handle-right" onMouseDown={(e) => handleSegmentMouseDown(e, seg, 'resize-right')} />

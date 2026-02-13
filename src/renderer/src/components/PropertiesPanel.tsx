@@ -1,5 +1,68 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { Segment, TextSegment, VideoSegment } from '../types'
+
+const STRIP_H = 68
+const STRIP_COUNT = 8
+
+function ClipFilmstrip({ seg }: { seg: VideoSegment }): JSX.Element {
+  const [frames, setFrames] = useState<string[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    setFrames([])
+
+    const video = document.createElement('video')
+    video.muted = true
+    video.preload = 'metadata'
+    video.src = `file://${seg.src}`;
+
+    (async () => {
+      await new Promise<void>((resolve) => {
+        if (video.readyState >= 1) { resolve(); return }
+        video.addEventListener('loadedmetadata', () => resolve(), { once: true })
+        video.load()
+      })
+      if (cancelled) return
+
+      const dur = video.duration
+      const canvas = document.createElement('canvas')
+      const aspect = video.videoWidth > 0 ? video.videoWidth / video.videoHeight : 16 / 9
+      canvas.height = STRIP_H
+      canvas.width = Math.round(STRIP_H * aspect)
+      const ctx = canvas.getContext('2d')!
+
+      for (let i = 0; i < STRIP_COUNT; i++) {
+        if (cancelled) break
+        const t = seg.sourceStartUs / 1e6 + (i + 0.5) / STRIP_COUNT * (seg.sourceDurationUs / 1e6)
+        video.currentTime = Math.max(0, Math.min(t, dur - 0.05))
+        await new Promise<void>((resolve) => {
+          video.addEventListener('seeked', () => resolve(), { once: true })
+          video.addEventListener('error', () => resolve(), { once: true })
+        })
+        if (cancelled) break
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+        const url = canvas.toDataURL('image/jpeg', 0.8)
+        setFrames((prev) => [...prev, url])
+      }
+    })().catch(() => {})
+
+    return () => { cancelled = true }
+  }, [seg.src, seg.sourceStartUs, seg.sourceDurationUs])
+
+  return (
+    <div style={{
+      display: 'flex', height: STRIP_H, borderRadius: 4, overflow: 'hidden',
+      background: '#111', marginBottom: 12, gap: 1
+    }}>
+      {frames.length === 0
+        ? <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#444', fontSize: 11 }}>Loading frames…</div>
+        : frames.map((url, i) => (
+          <img key={i} src={url} style={{ flex: 1, height: STRIP_H, objectFit: 'cover', minWidth: 0 }} draggable={false} />
+        ))
+      }
+    </div>
+  )
+}
 
 interface PropertiesPanelProps {
   segment: Segment | null
@@ -10,7 +73,8 @@ interface PropertiesPanelProps {
 function VideoProps({ seg, onDelete }: { seg: VideoSegment; onDelete: (id: string) => void }) {
   return (
     <div className="properties-panel">
-      <h3>Video Clip</h3>
+      <h3>Clip Preview</h3>
+      <ClipFilmstrip seg={seg} />
 
       <div className="prop-group">
         <span className="prop-label">Name</span>
