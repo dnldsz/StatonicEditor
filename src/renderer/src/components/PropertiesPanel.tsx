@@ -126,6 +126,23 @@ function TextProps({
       </div>
 
       <div className="prop-group">
+        <span className="prop-label">Alignment</span>
+        <div className="prop-row">
+          {(['left', 'center', 'right'] as const).map((align) => (
+            <button
+              key={align}
+              className={`btn btn-icon${(seg.textAlign ?? 'center') === align ? ' btn-active' : ''}`}
+              style={{ flex: 1, fontSize: 16 }}
+              onClick={() => onUpdate(seg.id, { textAlign: align })}
+              title={align}
+            >
+              {align === 'left' ? 'L' : align === 'center' ? 'C' : 'R'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="prop-group">
         <span className="prop-label">Position (X, Y)</span>
         <div className="prop-row">
           <input
@@ -159,6 +176,33 @@ function TextProps({
           min={0}
           onChange={(e) => onUpdate(seg.id, { startUs: Math.round(Number(e.target.value) * 1e6) })}
         />
+      </div>
+
+      <div className="prop-group">
+        <span className="prop-label">Outline width (px)</span>
+        <div className="prop-row">
+          <input
+            type="number"
+            className="prop-number"
+            value={Math.round(seg.strokeWidth ?? 0)}
+            min={0}
+            max={20}
+            step={1}
+            onChange={(e) => onUpdate(seg.id, { strokeWidth: Number(e.target.value) })}
+          />
+          <input
+            type="color"
+            className="color-swatch"
+            value={seg.strokeColor ?? '#000000'}
+            onChange={(e) => onUpdate(seg.id, { strokeColor: e.target.value })}
+          />
+          <input
+            className="prop-input"
+            value={seg.strokeColor ?? '#000000'}
+            onChange={(e) => onUpdate(seg.id, { strokeColor: e.target.value })}
+            style={{ flex: 1 }}
+          />
+        </div>
       </div>
 
       <div className="prop-group">

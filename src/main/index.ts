@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from 'fs'
 import { spawn } from 'child_process'
 
 const TIKTOK_FONT =
-  '/Users/danieldsouza/Downloads/tiktok-text-display-cufonfonts/TikTok Text Medium.ttf'
+  '/Users/danieldsouza/Downloads/tiktok-text-display-cufonfonts/TikTokTextMedium.otf'
 
 function createWindow(): void {
   const preloadPath = join(__dirname, '../preload/index.mjs')
@@ -29,6 +29,11 @@ function createWindow(): void {
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  // Prevent Electron from navigating away when files are dropped onto the window
+  win.webContents.on('will-navigate', (event) => {
+    event.preventDefault()
+  })
 }
 
 app.whenReady().then(() => {
@@ -113,6 +118,36 @@ ipcMain.handle('load-project', async () => {
   }
 })
 
+// Called when a file is dragged into the renderer — no dialog needed
+ipcMain.handle('get-video-info', async (_event, filePath: string) => {
+  const name = filePath.split('/').pop() ?? filePath
+  return new Promise((resolve) => {
+    const proc = spawn('ffprobe', [
+      '-v', 'quiet',
+      '-print_format', 'json',
+      '-show_streams',
+      filePath
+    ])
+    let out = ''
+    proc.stdout.on('data', (d: Buffer) => (out += d.toString()))
+    proc.on('close', () => {
+      try {
+        const json = JSON.parse(out)
+        const vstream = json.streams?.find((s: any) => s.codec_type === 'video')
+        const width = vstream?.width ?? 1080
+        const height = vstream?.height ?? 1920
+        const durationSec = parseFloat(vstream?.duration ?? '0')
+        resolve({ path: filePath, name, width, height, durationSec })
+      } catch {
+        resolve({ path: filePath, name, width: 1080, height: 1920, durationSec: 0 })
+      }
+    })
+    proc.on('error', () => {
+      resolve({ path: filePath, name, width: 1080, height: 1920, durationSec: 0 })
+    })
+  })
+})
+
 ipcMain.handle('export-video', async (event, project: any) => {
   const { filePath } = await dialog.showSaveDialog({
     defaultPath: `${project.name ?? 'export'}.mp4`,
@@ -172,8 +207,11 @@ ipcMain.handle('export-video', async (event, project: any) => {
     const hex = seg.color.replace('#', '')
     const outLabel = i === textSegments.length - 1 ? '[vout]' : `[vt${i}]`
     const boldStr = seg.bold ? ':bold=1' : ''
+    const strokeStr = (seg.strokeWidth ?? 0) > 0
+      ? `:borderw=${seg.strokeWidth}:bordercolor=0x${(seg.strokeColor ?? '#000000').replace('#', '').toUpperCase()}`
+      : ''
     filterParts.push(
-      `${currentIn}drawtext=fontfile='${TIKTOK_FONT}':text='${escaped}':fontsize=${seg.fontSize}:fontcolor=0x${hex.toUpperCase()}${boldStr}:x=${xPx - seg.fontSize * escaped.length / 4}:y=${yPx}:enable='between(t,${startSec},${endSec})'${outLabel}`
+      `${currentIn}drawtext=fontfile='${TIKTOK_FONT}':text='${escaped}':fontsize=${seg.fontSize}:fontcolor=0x${hex.toUpperCase()}${boldStr}${strokeStr}:x=${xPx}-(text_w/2):y=${yPx}-(text_h/2):enable='between(t,${startSec},${endSec})'${outLabel}`
     )
     currentIn = outLabel
   })

@@ -119,7 +119,9 @@ function reducer(state: AppState, action: Action): AppState {
 declare global {
   interface Window {
     api: {
+      getPathForFile: (file: File) => string
       openVideo: () => Promise<{ path: string; name: string; durationSec: number } | null>
+      getVideoInfo: (filePath: string) => Promise<{ path: string; name: string; durationSec: number }>
       saveProject: (project: Project) => Promise<{ ok?: boolean; cancelled?: boolean; error?: string }>
       loadProject: () => Promise<Project | { error: string } | null>
       exportVideo: (project: Project) => Promise<{ ok?: boolean; cancelled?: boolean; error?: string }>
@@ -306,7 +308,10 @@ export default function App(): JSX.Element {
       fontSize: 60,
       color: '#ffffff',
       bold: false,
-      italic: false
+      italic: false,
+      strokeWidth: 0,
+      strokeColor: '#000000',
+      textAlign: 'center'
     }
     dispatch({ type: 'ADD_TEXT_SEGMENT', segment: seg, trackId })
     dispatch({ type: 'SET_SELECTED', id: seg.id })
@@ -321,6 +326,44 @@ export default function App(): JSX.Element {
     cleanup()
     if (result.error) alert(`Export failed: ${result.error}`)
   }, [project])
+
+  // ── drop video onto timeline ────────────────────────────────────────────────
+
+  const handleDropVideo = useCallback(async (filePath: string) => {
+    const info = await window.api.getVideoInfo(filePath)
+    if (!info) return
+    const durationUs = Math.round(info.durationSec * 1e6)
+    let startUs = 0
+    for (const track of project.tracks) {
+      if (track.type !== 'video') continue
+      for (const seg of track.segments) {
+        const end = seg.startUs + seg.durationUs
+        if (end > startUs) startUs = end
+      }
+    }
+    const seg: VideoSegment = {
+      id: uid(),
+      type: 'video',
+      src: info.path,
+      name: info.name,
+      startUs,
+      durationUs,
+      sourceStartUs: 0,
+      sourceDurationUs: durationUs
+    }
+    dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: seg })
+    dispatch({ type: 'SET_SELECTED', id: seg.id })
+  }, [project])
+
+  // Also listen for the custom event dispatched by the window-level drop handler
+  // (second path for drag-drop in case element-level handler doesn't fire)
+  const handleDropVideoRef = useRef(handleDropVideo)
+  handleDropVideoRef.current = handleDropVideo
+  useEffect(() => {
+    const handler = (e: Event) => handleDropVideoRef.current((e as CustomEvent<string>).detail)
+    window.addEventListener('video-file-dropped', handler)
+    return () => window.removeEventListener('video-file-dropped', handler)
+  }, [])
 
   // ── selected segment ────────────────────────────────────────────────────────
 
@@ -393,6 +436,7 @@ export default function App(): JSX.Element {
           }}
           onSelectSegment={(id) => dispatch({ type: 'SET_SELECTED', id })}
           onUpdateSegment={(id, patch) => dispatch({ type: 'UPDATE_SEGMENT', id, patch: patch as any })}
+          onDropVideo={handleDropVideo}
         />
       </div>
     </div>

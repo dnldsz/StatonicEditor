@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Project, Segment } from '../types'
 
 const LABEL_W = 88
@@ -21,6 +21,7 @@ interface TimelineProps {
   onSeek: (t: number) => void
   onSelectSegment: (id: string | null) => void
   onUpdateSegment: (id: string, patch: Partial<Segment>) => void
+  onDropVideo: (filePath: string) => void
 }
 
 function formatTime(sec: number): string {
@@ -38,10 +39,11 @@ function getRulerInterval(zoom: number): { major: number; minor: number } {
 
 export default function Timeline({
   project, currentTimeSec, selectedId, zoom,
-  onSeek, onSelectSegment, onUpdateSegment
+  onSeek, onSelectSegment, onUpdateSegment, onDropVideo
 }: TimelineProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState | null>(null)
+  const [dropActive, setDropActive] = useState(false)
 
   // Total duration in seconds
   let totalSec = 10
@@ -110,6 +112,39 @@ export default function Timeline({
     }
   }, [zoom, onSeek, onUpdateSegment])
 
+  // ── Drag & drop video files (native listeners — bypasses React synthetic layer) ──
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+
+    const onDragOver = (e: DragEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+      setDropActive(true)
+    }
+
+    const onDragLeave = (e: DragEvent) => {
+      if (!el.contains(e.relatedTarget as Node)) setDropActive(false)
+    }
+
+    const onDrop = (e: DragEvent) => {
+      e.preventDefault()
+      // No stopPropagation — let event bubble to the window-level handler in main.tsx
+      // which dispatches 'video-file-dropped'. App.tsx listens for that event.
+      setDropActive(false)
+    }
+
+    el.addEventListener('dragover', onDragOver)
+    el.addEventListener('dragleave', onDragLeave)
+    el.addEventListener('drop', onDrop)
+    return () => {
+      el.removeEventListener('dragover', onDragOver)
+      el.removeEventListener('dragleave', onDragLeave)
+      el.removeEventListener('drop', onDrop)
+    }
+  }, [])
+
   const handleRulerMouseDown = (e: React.MouseEvent) => {
     if (!containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
@@ -141,7 +176,10 @@ export default function Timeline({
   const playheadLeft = LABEL_W + currentTimeSec * zoom
 
   return (
-    <div className="timeline-root" ref={containerRef}>
+    <div
+      className={`timeline-root${dropActive ? ' drop-active' : ''}`}
+      ref={containerRef}
+    >
       <div className="timeline-inner" style={{ width: innerWidth, minHeight: '100%' }}>
 
         {/* Ruler */}

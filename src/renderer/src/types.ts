@@ -21,6 +21,9 @@ export interface TextSegment {
   color: string   // hex e.g. "#ffffff"
   bold: boolean
   italic: boolean
+  strokeWidth: number   // outline thickness in px (0 = none)
+  strokeColor: string   // outline color hex
+  textAlign: 'left' | 'center' | 'right'
 }
 
 export type Segment = VideoSegment | TextSegment

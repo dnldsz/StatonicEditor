@@ -1,5 +1,5 @@
 {
-  "name": "capcut-editor",
+  "name": "iterate-editor",
   "version": "1.0.0",
   "description": "Standalone video editor — own JSON format, WYSIWYG canvas + timeline",
   "main": "./out/main/index.js",
