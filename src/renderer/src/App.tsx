@@ -281,6 +281,13 @@ export default function App(): JSX.Element {
     }
     dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: seg })
     dispatch({ type: 'SET_SELECTED', id: seg.id })
+    dispatch({ type: 'SET_TIME', t: startUs / 1e6 })
+    // Directly update videoRef — seekTo can't be used here because the new
+    // segment isn't in project state yet (dispatch is async)
+    if (videoRef.current) {
+      videoRef.current.src = `file://${info.path}`
+      videoRef.current.currentTime = 0
+    }
   }, [project])
 
   const handleAddText = useCallback(() => {
@@ -353,6 +360,11 @@ export default function App(): JSX.Element {
     }
     dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: seg })
     dispatch({ type: 'SET_SELECTED', id: seg.id })
+    dispatch({ type: 'SET_TIME', t: startUs / 1e6 })
+    if (videoRef.current) {
+      videoRef.current.src = `file://${info.path}`
+      videoRef.current.currentTime = 0
+    }
   }, [project])
 
   // Also listen for the custom event dispatched by the window-level drop handler
