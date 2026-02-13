@@ -252,7 +252,7 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
       const inputIdx = videoSegments.length + i
       const outLabel = i === textOverlays.length - 1 ? '[vout]' : `[vto${i}]`
       filterParts.push(
-        `${currentIn}[${inputIdx}:v]overlay=0:0:enable='between(t,${overlay.startSec},${overlay.endSec})'${outLabel}`
+        `${currentIn}[${inputIdx}:v]overlay=0:0:shortest=1:enable='between(t,${overlay.startSec},${overlay.endSec})'${outLabel}`
       )
       currentIn = outLabel
     })

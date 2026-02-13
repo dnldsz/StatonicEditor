@@ -368,23 +368,29 @@ export default function App(): JSX.Element {
   }, [project, currentTimeSec])
 
   const handleExport = useCallback(async () => {
-    // Render text segments to PNGs in the browser first (preserves emoji + WYSIWYG)
-    const textOverlays: Array<{ path: string; startSec: number; endSec: number }> = []
-    for (const track of project.tracks) {
-      if (track.type !== 'text') continue
-      for (const seg of track.segments) {
-        const ts = seg as TextSegment
-        const dataUrl = await renderTextToPng(ts, project.canvas.width, project.canvas.height)
-        const path = await window.api.saveTempPng(dataUrl, `overlay_${ts.id}.png`)
-        textOverlays.push({ path, startSec: ts.startUs / 1e6, endSec: (ts.startUs + ts.durationUs) / 1e6 })
+    let cleanup: (() => void) | null = null
+    try {
+      // Render text segments to PNGs in the browser first (preserves emoji + WYSIWYG)
+      const textOverlays: Array<{ path: string; startSec: number; endSec: number }> = []
+      for (const track of project.tracks) {
+        if (track.type !== 'text') continue
+        for (const seg of track.segments) {
+          const ts = seg as TextSegment
+          const dataUrl = await renderTextToPng(ts, project.canvas.width, project.canvas.height)
+          const path = await window.api.saveTempPng(dataUrl, `overlay_${ts.id}.png`)
+          textOverlays.push({ path, startSec: ts.startUs / 1e6, endSec: (ts.startUs + ts.durationUs) / 1e6 })
+        }
       }
+      cleanup = window.api.onExportProgress((line) => {
+        console.log('[ffmpeg]', line)
+      })
+      const result = await window.api.exportVideo(project, textOverlays)
+      if (result.error) alert(`Export failed: ${result.error}`)
+    } catch (err: any) {
+      alert(`Export error: ${err?.message ?? String(err)}`)
+    } finally {
+      cleanup?.()
     }
-    const cleanup = window.api.onExportProgress((line) => {
-      console.log('[ffmpeg]', line)
-    })
-    const result = await window.api.exportVideo(project, textOverlays)
-    cleanup()
-    if (result.error) alert(`Export failed: ${result.error}`)
   }, [project])
 
   // ── drop video onto timeline ────────────────────────────────────────────────

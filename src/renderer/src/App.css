@@ -1,12 +1,12 @@
 /* ── Fonts ───────────────────────────────────────────────────────────────── */
 @font-face {
   font-family: 'TikTokText';
-  src: url('file:///Users/danieldsouza/Downloads/tiktok-text-display-cufonfonts/TikTokTextMedium.otf') format('opentype');
+  src: url('/fonts/TikTokTextMedium.otf') format('opentype');
   font-weight: 400;
 }
 @font-face {
   font-family: 'TikTokText';
-  src: url('file:///Users/danieldsouza/Downloads/tiktok-text-display-cufonfonts/TikTokTextBold.otf') format('opentype');
+  src: url('/fonts/TikTokTextBold.otf') format('opentype');
   font-weight: 700;
 }
 
