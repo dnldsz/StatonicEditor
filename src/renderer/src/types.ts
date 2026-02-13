@@ -26,10 +26,10 @@ export interface TextSegment {
   color: string   // hex e.g. "#ffffff"
   bold: boolean
   italic: boolean
-  strokeWidth: number   // outline thickness in px (0 = none)
-  strokeColor: string   // outline color hex
+  strokeEnabled: boolean  // outline on/off
+  strokeColor: string     // outline color hex
   textAlign: 'left' | 'center' | 'right'
-  lineSpacing: number   // CSS line-height multiplier, e.g. 1.2
+  textScale: number       // scale factor from handle drag (1.0 = base)
 }
 
 export type Segment = VideoSegment | TextSegment

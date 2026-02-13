@@ -250,8 +250,9 @@ ipcMain.handle('export-video', async (event, project: any) => {
     const yPx = Math.round(((1 - seg.y) / 2) * canvas.height)
     const hex = seg.color.replace('#', '')
     const boldStr = seg.bold ? ':bold=1' : ''
-    const strokeStr = (seg.strokeWidth ?? 0) > 0
-      ? `:borderw=${seg.strokeWidth}:bordercolor=0x${(seg.strokeColor ?? '#000000').replace('#', '').toUpperCase()}`
+    const effectiveFontSize = seg.fontSize * (seg.textScale ?? 1)
+    const strokeStr = (seg.strokeEnabled ?? false)
+      ? `:borderw=${Math.round(effectiveFontSize * 6.9 / 97.0)}:bordercolor=0x${(seg.strokeColor ?? '#000000').replace('#', '').toUpperCase()}`
       : ''
     // x expression respects textAlign (matching canvas preview)
     const xExpr = (seg.textAlign ?? 'center') === 'left'
@@ -261,7 +262,7 @@ ipcMain.handle('export-video', async (event, project: any) => {
         : `${xPx}-(text_w/2)`
 
     const lines: string[] = seg.text.split('\n')
-    const lineHeight = Math.round(seg.fontSize * (seg.lineSpacing ?? 1.2))
+    const lineHeight = Math.round(effectiveFontSize)
     const totalH = lines.length * lineHeight
 
     lines.forEach((line, lineIdx) => {
@@ -271,7 +272,7 @@ ipcMain.handle('export-video', async (event, project: any) => {
         .replace(/\\/g, '\\\\')
         .replace(/'/g, "\\'")
         .replace(/:/g, '\\:')
-      textLines.push({ escapedText, fontsize: seg.fontSize, hex, boldStr, strokeStr, xExpr, lineCenterY, startSec, endSec })
+      textLines.push({ escapedText, fontsize: Math.round(effectiveFontSize), hex, boldStr, strokeStr, xExpr, lineCenterY, startSec, endSec })
     })
   })
 

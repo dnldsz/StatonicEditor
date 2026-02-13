@@ -48,7 +48,7 @@ function scaleSign(dir: HandleDir): number {
 type ScaleDragState = {
   id: string; dir: HandleDir; startX: number; startY: number; previewScale: number
 } & (
-  | { kind: 'text'; origFontSize: number; origStrokeWidth: number }
+  | { kind: 'text'; origFontSize: number; origTextScale: number }
   | { kind: 'video'; origClipScale: number; previewH: number }
 )
 
@@ -182,7 +182,7 @@ export default function Canvas({
       const ts = seg as TextSegment
       scaleDragRef.current = {
         kind: 'text', id: seg.id, dir, startX: e.clientX, startY: e.clientY,
-        previewScale: ps, origFontSize: ts.fontSize, origStrokeWidth: ts.strokeWidth
+        previewScale: ps, origFontSize: ts.fontSize, origTextScale: ts.textScale ?? 1
       }
     } else {
       const vs = seg as VideoSegment
@@ -200,11 +200,8 @@ export default function Canvas({
       const rawDiag = (Math.abs(dx) > Math.abs(dy) ? dx : -dy) * scaleSign(drag.dir)
 
       if (drag.kind === 'text') {
-        const diag = rawDiag / drag.previewScale
-        const newSize = Math.max(8, Math.round(drag.origFontSize + diag * 0.5))
-        const ratio = newSize / drag.origFontSize
-        const newStroke = drag.origStrokeWidth * ratio
-        onUpdateSegment(drag.id, { fontSize: newSize, strokeWidth: newStroke } as Partial<TextSegment>)
+        const newScale = Math.max(0.1, drag.origTextScale + rawDiag / (drag.origFontSize * drag.previewScale))
+        onUpdateSegment(drag.id, { textScale: newScale } as Partial<TextSegment>)
       } else {
         // rawDiag in screen pixels / previewH → delta clipScale
         const newScale = Math.max(0.05, drag.origClipScale + rawDiag / drag.previewH)
@@ -321,19 +318,19 @@ export default function Canvas({
               style={{
                 position: 'relative',
                 display: 'inline-block',
-                fontSize: seg.fontSize * previewScale,
+                fontSize: seg.fontSize * (seg.textScale ?? 1) * previewScale,
                 color: seg.color,
                 fontWeight: seg.bold ? 700 : 400,
                 fontStyle: seg.italic ? 'italic' : 'normal',
                 fontFamily: "'TikTokText', -apple-system, sans-serif",
-                WebkitTextStroke: seg.strokeWidth > 0
-                  ? `${seg.strokeWidth * 2 * previewScale}px ${seg.strokeColor}`
+                WebkitTextStroke: (seg.strokeEnabled ?? false)
+                  ? `${seg.fontSize * (seg.textScale ?? 1) * (6.9 / 97.0) * 2 * previewScale}px ${seg.strokeColor}`
                   : undefined,
                 cursor: 'move',
                 userSelect: 'none',
                 whiteSpace: 'pre',
                 textAlign: seg.textAlign ?? 'center',
-                lineHeight: seg.lineSpacing ?? 1.2,
+                lineHeight: 1.0,
                 padding: '2px 4px'
               }}
               onMouseDown={(e) => startMoveDrag(e, seg.id, 'text', seg.x, seg.y)}

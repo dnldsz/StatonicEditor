@@ -264,17 +264,16 @@ function TextProps({
       </div>
 
       <div className="prop-group">
-        <span className="prop-label">Outline width (px)</span>
+        <span className="prop-label">Outline</span>
         <div className="prop-row">
-          <input
-            type="number"
-            className="prop-number"
-            value={(seg.strokeWidth ?? 0).toFixed(1)}
-            min={0}
-            max={20}
-            step={0.1}
-            onChange={(e) => onUpdate(seg.id, { strokeWidth: Number(e.target.value) })}
-          />
+          <label className="prop-checkbox">
+            <input
+              type="checkbox"
+              checked={seg.strokeEnabled ?? false}
+              onChange={(e) => onUpdate(seg.id, { strokeEnabled: e.target.checked })}
+            />
+            Enabled
+          </label>
           <input
             type="color"
             className="color-swatch"
@@ -288,19 +287,6 @@ function TextProps({
             style={{ flex: 1 }}
           />
         </div>
-      </div>
-
-      <div className="prop-group">
-        <span className="prop-label">Line spacing</span>
-        <input
-          type="number"
-          className="prop-number"
-          value={(seg.lineSpacing ?? 1.2).toFixed(2)}
-          min={0.5}
-          max={4}
-          step={0.05}
-          onChange={(e) => onUpdate(seg.id, { lineSpacing: Number(e.target.value) })}
-        />
       </div>
 
       <div className="prop-group">

@@ -319,10 +319,10 @@ export default function App(): JSX.Element {
       color: '#ffffff',
       bold: false,
       italic: false,
-      strokeWidth: 0,
+      strokeEnabled: false,
       strokeColor: '#000000',
       textAlign: 'center',
-      lineSpacing: 1.2
+      textScale: 1
     }
     dispatch({ type: 'ADD_TEXT_SEGMENT', segment: seg, trackId })
     dispatch({ type: 'SET_SELECTED', id: seg.id })
