@@ -120,8 +120,8 @@ declare global {
   interface Window {
     api: {
       getPathForFile: (file: File) => string
-      openVideo: () => Promise<{ path: string; name: string; durationSec: number } | null>
-      getVideoInfo: (filePath: string) => Promise<{ path: string; name: string; durationSec: number }>
+      openVideo: () => Promise<{ path: string; name: string; durationSec: number; width: number; height: number } | null>
+      getVideoInfo: (filePath: string) => Promise<{ path: string; name: string; durationSec: number; width: number; height: number }>
       saveProject: (project: Project) => Promise<{ ok?: boolean; cancelled?: boolean; error?: string }>
       loadProject: () => Promise<Project | { error: string } | null>
       exportVideo: (project: Project) => Promise<{ ok?: boolean; cancelled?: boolean; error?: string }>
@@ -278,8 +278,8 @@ export default function App(): JSX.Element {
       durationUs,
       sourceStartUs: 0,
       sourceDurationUs: durationUs,
-      sourceWidth: (info as any).width ?? 1080,
-      sourceHeight: (info as any).height ?? 1920,
+      sourceWidth: info.width,
+      sourceHeight: info.height,
       clipX: 0, clipY: 0, clipScale: 1
     }
     dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: seg })
@@ -360,8 +360,8 @@ export default function App(): JSX.Element {
       durationUs,
       sourceStartUs: 0,
       sourceDurationUs: durationUs,
-      sourceWidth: (info as any).width ?? 1080,
-      sourceHeight: (info as any).height ?? 1920,
+      sourceWidth: info.width,
+      sourceHeight: info.height,
       clipX: 0, clipY: 0, clipScale: 1
     }
     dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: seg })

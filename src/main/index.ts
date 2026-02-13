@@ -58,6 +58,25 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
+// ── helpers ────────────────────────────────────────────────────────────────────
+
+function parseVideoStream(vstream: any): { width: number; height: number; durationSec: number } {
+  let width: number = vstream?.width ?? 1080
+  let height: number = vstream?.height ?? 1920
+  const durationSec = parseFloat(vstream?.duration ?? '0')
+
+  // Mobile videos are often encoded in landscape with a rotation tag.
+  // ffprobe reports raw encoded dimensions; we need display dimensions.
+  const tagRotate = parseInt(vstream?.tags?.rotate ?? '0')
+  const sideRotate = parseInt(vstream?.side_data_list?.[0]?.rotation ?? '0')
+  const rotate = tagRotate || sideRotate
+  if (Math.abs(rotate % 180) === 90) {
+    ;[width, height] = [height, width]
+  }
+
+  return { width, height, durationSec }
+}
+
 // ── IPC handlers ───────────────────────────────────────────────────────────────
 
 ipcMain.handle('open-video', async () => {
@@ -85,12 +104,11 @@ ipcMain.handle('open-video', async () => {
       try {
         const json = JSON.parse(out)
         const vstream = json.streams?.find((s: any) => s.codec_type === 'video')
-        const width = vstream?.width ?? 1080
-        const height = vstream?.height ?? 1920
-        const durationSec = parseFloat(vstream?.duration ?? '0')
+        const { width, height, durationSec } = parseVideoStream(vstream)
         resolve({ path: filePath, name, width, height, durationSec })
       } catch {
         resolve({ path: filePath, name, width: 1080, height: 1920, durationSec: 0 })
+
       }
     })
     proc.on('error', () => {
@@ -145,12 +163,11 @@ ipcMain.handle('get-video-info', async (_event, filePath: string) => {
       try {
         const json = JSON.parse(out)
         const vstream = json.streams?.find((s: any) => s.codec_type === 'video')
-        const width = vstream?.width ?? 1080
-        const height = vstream?.height ?? 1920
-        const durationSec = parseFloat(vstream?.duration ?? '0')
+        const { width, height, durationSec } = parseVideoStream(vstream)
         resolve({ path: filePath, name, width, height, durationSec })
       } catch {
         resolve({ path: filePath, name, width: 1080, height: 1920, durationSec: 0 })
+
       }
     })
     proc.on('error', () => {
