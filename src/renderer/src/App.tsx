@@ -277,7 +277,10 @@ export default function App(): JSX.Element {
       startUs,
       durationUs,
       sourceStartUs: 0,
-      sourceDurationUs: durationUs
+      sourceDurationUs: durationUs,
+      sourceWidth: (info as any).width ?? 1080,
+      sourceHeight: (info as any).height ?? 1920,
+      clipX: 0, clipY: 0, clipScale: 1
     }
     dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: seg })
     dispatch({ type: 'SET_SELECTED', id: seg.id })
@@ -356,7 +359,10 @@ export default function App(): JSX.Element {
       startUs,
       durationUs,
       sourceStartUs: 0,
-      sourceDurationUs: durationUs
+      sourceDurationUs: durationUs,
+      sourceWidth: (info as any).width ?? 1080,
+      sourceHeight: (info as any).height ?? 1920,
+      clipX: 0, clipY: 0, clipScale: 1
     }
     dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: seg })
     dispatch({ type: 'SET_SELECTED', id: seg.id })
@@ -383,8 +389,8 @@ export default function App(): JSX.Element {
     ? project.tracks.flatMap((t) => t.segments).find((s) => s.id === selectedId) ?? null
     : null
 
-  const handleUpdateSegment = useCallback((id: string, patch: Partial<TextSegment>) => {
-    dispatch({ type: 'UPDATE_SEGMENT', id, patch: patch as any })
+  const handleUpdateSegment = useCallback((id: string, patch: Partial<Segment>) => {
+    dispatch({ type: 'UPDATE_SEGMENT', id, patch })
   }, [])
 
   // ── render ──────────────────────────────────────────────────────────────────

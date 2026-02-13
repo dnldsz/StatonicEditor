@@ -193,11 +193,27 @@ ipcMain.handle('export-video', async (event, project: any) => {
     )
   }
 
-  // Scale + concat filter
+  // Per-clip: scale to display size, overlay on black canvas, then concat
   const filterParts: string[] = []
   for (let i = 0; i < videoSegments.length; i++) {
+    const seg = videoSegments[i]
+    const clipScale = seg.clipScale ?? 1
+    const clipX = seg.clipX ?? 0
+    const clipY = seg.clipY ?? 0
+    const srcW = seg.sourceWidth ?? canvas.width
+    const srcH = seg.sourceHeight ?? canvas.height
+
+    // Display size in export pixels (must be even for libx264)
+    let dH = Math.round(clipScale * canvas.height / 2) * 2
+    let dW = Math.round((srcW / srcH) * dH / 2) * 2
+    // Top-left corner position on canvas
+    const x = Math.round((clipX + 1) / 2 * canvas.width - dW / 2)
+    const y = Math.round((1 - clipY) / 2 * canvas.height - dH / 2)
+
     filterParts.push(
-      `[${i}:v]scale=${canvas.width}:${canvas.height}:force_original_aspect_ratio=increase,crop=${canvas.width}:${canvas.height}[v${i}]`
+      `color=c=black:s=${canvas.width}x${canvas.height}:r=30[bg${i}]`,
+      `[${i}:v]scale=${dW}:${dH}:force_original_aspect_ratio=disable,fps=fps=30[sv${i}]`,
+      `[bg${i}][sv${i}]overlay=${x}:${y}:shortest=1[v${i}]`
     )
   }
   const concatInputs = videoSegments.map((_, i) => `[v${i}]`).join('')

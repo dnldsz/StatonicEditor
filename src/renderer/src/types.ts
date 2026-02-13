@@ -7,6 +7,11 @@ export interface VideoSegment {
   durationUs: number   // duration on timeline (microseconds)
   sourceStartUs: number    // trim: where in source to start
   sourceDurationUs: number // trim: how much of source to use
+  sourceWidth: number      // intrinsic pixel width from ffprobe
+  sourceHeight: number     // intrinsic pixel height from ffprobe
+  clipX: number        // canvas-space position (-1 to 1), 0 = center
+  clipY: number        // canvas-space position (-1 to 1), 0 = center
+  clipScale: number    // 1.0 = fill canvas height
 }
 
 export interface TextSegment {

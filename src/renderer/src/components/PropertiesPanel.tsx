@@ -66,19 +66,53 @@ function ClipFilmstrip({ seg }: { seg: VideoSegment }): JSX.Element {
 
 interface PropertiesPanelProps {
   segment: Segment | null
-  onUpdate: (id: string, patch: Partial<TextSegment>) => void
+  onUpdate: (id: string, patch: Partial<Segment>) => void
   onDelete: (id: string) => void
 }
 
-function VideoProps({ seg, onDelete }: { seg: VideoSegment; onDelete: (id: string) => void }) {
+function VideoProps({
+  seg, onUpdate, onDelete
+}: {
+  seg: VideoSegment
+  onUpdate: (id: string, patch: Partial<VideoSegment>) => void
+  onDelete: (id: string) => void
+}) {
   return (
     <div className="properties-panel">
       <h3>Clip Preview</h3>
       <ClipFilmstrip seg={seg} />
 
       <div className="prop-group">
-        <span className="prop-label">Name</span>
-        <div className="prop-input" style={{ color: '#888', fontSize: 12 }}>{seg.name}</div>
+        <span className="prop-label">Scale</span>
+        <input
+          type="number"
+          className="prop-number"
+          value={(seg.clipScale ?? 1).toFixed(2)}
+          step={0.05}
+          min={0.05}
+          max={5}
+          onChange={(e) => onUpdate(seg.id, { clipScale: Number(e.target.value) })}
+        />
+      </div>
+
+      <div className="prop-group">
+        <span className="prop-label">Position (X, Y)</span>
+        <div className="prop-row">
+          <input
+            type="number"
+            className="prop-number"
+            value={(seg.clipX ?? 0).toFixed(3)}
+            step={0.01}
+            onChange={(e) => onUpdate(seg.id, { clipX: Number(e.target.value) })}
+          />
+          <input
+            type="number"
+            className="prop-number"
+            value={(seg.clipY ?? 0).toFixed(3)}
+            step={0.01}
+            onChange={(e) => onUpdate(seg.id, { clipY: Number(e.target.value) })}
+          />
+        </div>
       </div>
 
       <div className="prop-group">
@@ -89,28 +123,14 @@ function VideoProps({ seg, onDelete }: { seg: VideoSegment; onDelete: (id: strin
       </div>
 
       <div className="prop-group">
-        <span className="prop-label">Source start</span>
-        <div className="prop-input" style={{ color: '#888', fontSize: 12 }}>
-          {(seg.sourceStartUs / 1e6).toFixed(3)}s
+        <span className="prop-label">File</span>
+        <div className="prop-input" style={{ color: '#666', fontSize: 10, wordBreak: 'break-all', lineHeight: 1.4 }}>
+          {seg.name}
         </div>
       </div>
 
       <div className="prop-group">
-        <span className="prop-label">File path</span>
-        <div
-          className="prop-input"
-          style={{ color: '#666', fontSize: 10, wordBreak: 'break-all', lineHeight: 1.4 }}
-        >
-          {seg.src}
-        </div>
-      </div>
-
-      <div className="prop-group">
-        <button
-          className="btn btn-danger"
-          style={{ width: '100%' }}
-          onClick={() => onDelete(seg.id)}
-        >
+        <button className="btn btn-danger" style={{ width: '100%' }} onClick={() => onDelete(seg.id)}>
           Delete Clip
         </button>
       </div>
@@ -306,7 +326,7 @@ export default function PropertiesPanel({ segment, onUpdate, onDelete }: Propert
   }
 
   if (segment.type === 'video') {
-    return <VideoProps seg={segment as VideoSegment} onDelete={onDelete} />
+    return <VideoProps seg={segment as VideoSegment} onUpdate={onUpdate as any} onDelete={onDelete} />
   }
 
   return <TextProps seg={segment as TextSegment} onUpdate={onUpdate} onDelete={onDelete} />
