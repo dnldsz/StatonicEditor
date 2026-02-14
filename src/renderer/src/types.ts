@@ -7,11 +7,16 @@ export interface VideoSegment {
   durationUs: number   // duration on timeline (microseconds)
   sourceStartUs: number    // trim: where in source to start
   sourceDurationUs: number // trim: how much of source to use
+  fileDurationUs: number   // total duration of source file (for resize clamping)
   sourceWidth: number      // intrinsic pixel width from ffprobe
   sourceHeight: number     // intrinsic pixel height from ffprobe
   clipX: number        // canvas-space position (-1 to 1), 0 = center
   clipY: number        // canvas-space position (-1 to 1), 0 = center
   clipScale: number    // 1.0 = fill canvas height
+  cropLeft: number     // fraction of width to crop from left (0-1)
+  cropRight: number    // fraction of width to crop from right (0-1)
+  cropTop: number      // fraction of height to crop from top (0-1)
+  cropBottom: number   // fraction of height to crop from bottom (0-1)
 }
 
 export interface TextSegment {
@@ -54,6 +59,7 @@ export interface AppState {
   clipboard: Segment | null
   currentTimeSec: number
   selectedId: string | null
+  croppingId: string | null
   zoom: number
   isPlaying: boolean
 }
@@ -63,6 +69,7 @@ export type Action =
   | { type: 'SET_TIME'; t: number }
   | { type: 'SET_PLAYING'; playing: boolean }
   | { type: 'SET_SELECTED'; id: string | null }
+  | { type: 'SET_CROPPING'; id: string | null }
   | { type: 'SET_ZOOM'; zoom: number }
   | { type: 'SET_CLIPBOARD'; segment: Segment | null }
   // ── history ──────────────────────────────────────────────────────────────
@@ -77,5 +84,6 @@ export type Action =
   | { type: 'UPDATE_SEGMENT'; id: string; patch: Partial<Segment> }
   | { type: 'DELETE_SEGMENT'; id: string }
   | { type: 'SLICE_AT'; timeUs: number }
+  | { type: 'MOVE_SEGMENT_TO_TRACK'; segId: string; fromTrackId: string }
   // ── drag (no history) ────────────────────────────────────────────────────
   | { type: 'MOVE_SEGMENT'; id: string; patch: Partial<Segment> }

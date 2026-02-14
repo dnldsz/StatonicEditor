@@ -212,7 +212,7 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
     )
   }
 
-  // Per-clip: scale to display size, overlay on black canvas, then concat
+  // Per-clip: crop (if set), scale to display size, overlay on black canvas, then concat
   const filterParts: string[] = []
   for (let i = 0; i < videoSegments.length; i++) {
     const seg = videoSegments[i]
@@ -221,6 +221,10 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
     const clipY = seg.clipY ?? 0
     const srcW = seg.sourceWidth ?? canvas.width
     const srcH = seg.sourceHeight ?? canvas.height
+    const cropL = seg.cropLeft ?? 0
+    const cropR = seg.cropRight ?? 0
+    const cropT = seg.cropTop ?? 0
+    const cropB = seg.cropBottom ?? 0
 
     // Display size in export pixels (must be even for libx264)
     let dH = Math.round(clipScale * canvas.height / 2) * 2
@@ -229,9 +233,15 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
     const x = Math.round((clipX + 1) / 2 * canvas.width - dW / 2)
     const y = Math.round((1 - clipY) / 2 * canvas.height - dH / 2)
 
+    // Build crop filter if any cropping is applied
+    const hasCrop = cropL > 0 || cropR > 0 || cropT > 0 || cropB > 0
+    const cropFilter = hasCrop
+      ? `crop=iw*(1-${cropL}-${cropR}):ih*(1-${cropT}-${cropB}):iw*${cropL}:ih*${cropT},`
+      : ''
+
     filterParts.push(
       `color=c=black:s=${canvas.width}x${canvas.height}:r=30[bg${i}]`,
-      `[${i}:v]scale=${dW}:${dH}:force_original_aspect_ratio=disable,fps=fps=30[sv${i}]`,
+      `[${i}:v]${cropFilter}scale=${dW}:${dH}:force_original_aspect_ratio=disable,fps=fps=30[sv${i}]`,
       `[bg${i}][sv${i}]overlay=${x}:${y}:shortest=1[v${i}]`
     )
   }

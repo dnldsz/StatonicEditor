@@ -5,9 +5,11 @@ interface CanvasProps {
   project: Project
   currentTimeSec: number
   selectedId: string | null
+  croppingId: string | null
   videoRef: RefObject<HTMLVideoElement>
   onSelectSegment: (id: string | null) => void
   onUpdateSegment: (id: string, patch: Partial<Segment>) => void
+  onSetCropping: (id: string | null) => void
 }
 
 const SNAP_THRESHOLD = 0.04
@@ -55,13 +57,22 @@ type MoveDragState = {
   kind: 'text' | 'video'
 }
 
+type CropEdge = 'left' | 'right' | 'top' | 'bottom'
+type CropDragState = {
+  id: string; edge: CropEdge
+  startX: number; startY: number
+  origLeft: number; origRight: number; origTop: number; origBottom: number
+  elWidth: number; elHeight: number
+}
+
 export default function Canvas({
-  project, currentTimeSec, selectedId, videoRef,
-  onSelectSegment, onUpdateSegment
+  project, currentTimeSec, selectedId, croppingId, videoRef,
+  onSelectSegment, onUpdateSegment, onSetCropping
 }: CanvasProps): JSX.Element {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const moveDragRef = useRef<MoveDragState | null>(null)
   const scaleDragRef = useRef<ScaleDragState | null>(null)
+  const cropDragRef = useRef<CropDragState | null>(null)
   const [snapGuide, setSnapGuide] = useState<{ x: boolean; y: boolean }>({ x: false, y: false })
   const [previewSize, setPreviewSize] = useState({ w: 0, h: 0 })
 
@@ -89,13 +100,13 @@ export default function Canvas({
   // ── find segments at current time ─────────────────────────────────────────
 
   let activeVideoSeg: VideoSegment | null = null
-  // z-index: tracks higher in the list (lower array index) render on top.
-  // Video track is always background regardless.
+  // Higher array index = higher z-layer (last track is on top).
+  // Video track is always background regardless of z.
   const visibleTexts: Array<{ seg: TextSegment; z: number }> = []
 
   for (let ti = 0; ti < project.tracks.length; ti++) {
     const track = project.tracks[ti]
-    const z = project.tracks.length - ti  // higher index in list → lower z
+    const z = ti + 1  // higher index = higher z-layer
     for (const seg of track.segments) {
       const start = seg.startUs / 1e6
       const end = (seg.startUs + seg.durationUs) / 1e6
@@ -117,6 +128,7 @@ export default function Canvas({
   const vidTop = ((1 - clipY) / 2) * (previewH || previewSize.w / aspect)
 
   const isVideoSelected = activeVideoSeg !== null && activeVideoSeg.id === selectedId
+  const isCropping = croppingId !== null && activeVideoSeg !== null && croppingId === activeVideoSeg.id
 
   const getRect = useCallback(() => wrapperRef.current?.getBoundingClientRect() ?? null, [])
 
@@ -231,6 +243,48 @@ export default function Canvas({
     window.addEventListener('mouseup', onUp)
   }, [onUpdateSegment])
 
+  // ── crop drag ──────────────────────────────────────────────────────────────
+
+  const startCropDrag = (e: React.MouseEvent, edge: CropEdge) => {
+    e.stopPropagation()
+    e.preventDefault()
+    if (!activeVideoSeg) return
+    const el = (e.currentTarget as HTMLElement).parentElement!
+    const rect = el.getBoundingClientRect()
+    cropDragRef.current = {
+      id: activeVideoSeg.id, edge,
+      startX: e.clientX, startY: e.clientY,
+      origLeft: activeVideoSeg.cropLeft ?? 0,
+      origRight: activeVideoSeg.cropRight ?? 0,
+      origTop: activeVideoSeg.cropTop ?? 0,
+      origBottom: activeVideoSeg.cropBottom ?? 0,
+      elWidth: rect.width,
+      elHeight: rect.height
+    }
+
+    const onMove = (me: MouseEvent) => {
+      const drag = cropDragRef.current
+      if (!drag) return
+      const dx = (me.clientX - drag.startX) / drag.elWidth
+      const dy = (me.clientY - drag.startY) / drag.elHeight
+      const patch: Partial<VideoSegment> = {}
+      if (drag.edge === 'left')   patch.cropLeft   = Math.max(0, Math.min(0.95, drag.origLeft + dx))
+      if (drag.edge === 'right')  patch.cropRight  = Math.max(0, Math.min(0.95, drag.origRight - dx))
+      if (drag.edge === 'top')    patch.cropTop    = Math.max(0, Math.min(0.95, drag.origTop + dy))
+      if (drag.edge === 'bottom') patch.cropBottom = Math.max(0, Math.min(0.95, drag.origBottom - dy))
+      onUpdateSegment(drag.id, patch)
+    }
+
+    const onUp = () => {
+      cropDragRef.current = null
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
   // ── render ─────────────────────────────────────────────────────────────────
 
   return (
@@ -244,7 +298,12 @@ export default function Canvas({
         width: 'auto', height: '100%',
         position: 'relative', overflow: 'hidden', background: '#000'
       }}
-      onClick={(e) => { if (e.target === wrapperRef.current) onSelectSegment(null) }}
+      onClick={(e) => {
+        if (e.target === wrapperRef.current) {
+          onSelectSegment(null)
+          if (croppingId) onSetCropping(null)
+        }
+      }}
     >
       {/* ── Video clip ─────────────────────────────────────────────────────── */}
       <div
@@ -256,13 +315,17 @@ export default function Canvas({
           top: vidTop,
           transform: 'translate(-50%, -50%)',
           zIndex: 1,
-          outline: isVideoSelected ? '2px solid #0a7ef0' : 'none',
-          cursor: activeVideoSeg ? 'move' : 'default',
+          outline: isVideoSelected && !isCropping ? '2px solid #0a7ef0' : 'none',
+          cursor: activeVideoSeg ? (isCropping ? 'default' : 'move') : 'default',
           boxSizing: 'border-box'
         }}
-        onMouseDown={activeVideoSeg ? (e) =>
+        onMouseDown={activeVideoSeg && !isCropping ? (e) =>
           startMoveDrag(e, activeVideoSeg!.id, 'video', clipX, clipY) : undefined}
         onClick={(e) => { e.stopPropagation(); if (activeVideoSeg) onSelectSegment(activeVideoSeg.id) }}
+        onDoubleClick={(e) => {
+          e.stopPropagation()
+          if (activeVideoSeg) onSetCropping(isCropping ? null : activeVideoSeg.id)
+        }}
       >
         {/* Video element fills the wrapper exactly — no bars possible */}
         <video
@@ -272,8 +335,62 @@ export default function Canvas({
           preload="auto"
         />
 
-        {/* Handles on selected video */}
-        {isVideoSelected && HANDLES.map((dir) => (
+        {/* ── Crop mode overlay ─────────────────────────────────────────── */}
+        {isCropping && activeVideoSeg && (() => {
+          const cl = activeVideoSeg.cropLeft ?? 0
+          const cr = activeVideoSeg.cropRight ?? 0
+          const ct = activeVideoSeg.cropTop ?? 0
+          const cb = activeVideoSeg.cropBottom ?? 0
+          return (
+            <>
+              {/* Dark masks on cropped areas */}
+              <div style={{ position: 'absolute', top: 0, left: 0, width: `${cl * 100}%`, height: '100%', background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
+              <div style={{ position: 'absolute', top: 0, right: 0, width: `${cr * 100}%`, height: '100%', background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
+              <div style={{ position: 'absolute', top: 0, left: `${cl * 100}%`, right: `${cr * 100}%`, height: `${ct * 100}%`, background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
+              <div style={{ position: 'absolute', bottom: 0, left: `${cl * 100}%`, right: `${cr * 100}%`, height: `${cb * 100}%`, background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
+
+              {/* Crop border outline */}
+              <div style={{
+                position: 'absolute',
+                left: `${cl * 100}%`, right: `${cr * 100}%`,
+                top: `${ct * 100}%`, bottom: `${cb * 100}%`,
+                border: '2px solid #fff',
+                pointerEvents: 'none', zIndex: 16
+              }} />
+
+              {/* Draggable edge handles */}
+              <div
+                style={{ position: 'absolute', top: 0, left: `${cl * 100}%`, width: 6, height: '100%', cursor: 'ew-resize', zIndex: 20, transform: 'translateX(-50%)' }}
+                onMouseDown={(e) => startCropDrag(e, 'left')}
+              />
+              <div
+                style={{ position: 'absolute', top: 0, right: `${cr * 100}%`, width: 6, height: '100%', cursor: 'ew-resize', zIndex: 20, transform: 'translateX(50%)' }}
+                onMouseDown={(e) => startCropDrag(e, 'right')}
+              />
+              <div
+                style={{ position: 'absolute', left: 0, right: 0, top: `${ct * 100}%`, height: 6, cursor: 'ns-resize', zIndex: 20, transform: 'translateY(-50%)' }}
+                onMouseDown={(e) => startCropDrag(e, 'top')}
+              />
+              <div
+                style={{ position: 'absolute', left: 0, right: 0, bottom: `${cb * 100}%`, height: 6, cursor: 'ns-resize', zIndex: 20, transform: 'translateY(50%)' }}
+                onMouseDown={(e) => startCropDrag(e, 'bottom')}
+              />
+
+              {/* Crop hint label */}
+              <div style={{
+                position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)',
+                background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: 11,
+                padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap',
+                pointerEvents: 'none', zIndex: 25
+              }}>
+                Double-click or press Esc to exit crop
+              </div>
+            </>
+          )
+        })()}
+
+        {/* Handles on selected video (only when not cropping) */}
+        {isVideoSelected && !isCropping && HANDLES.map((dir) => (
           <div
             key={dir}
             style={handleStyle(dir)}

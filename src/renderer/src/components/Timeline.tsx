@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Project, Segment } from '../types'
+import { Project, Segment, VideoSegment } from '../types'
 
 const LABEL_W = 88
 const TRACK_H = 44
@@ -40,8 +40,11 @@ interface DragState {
   segId?: string
   trackId?: string
   startX: number
+  startY?: number       // for drag-up detection
   startUs?: number
   durationUs?: number
+  srcStartUs?: number   // sourceStartUs at drag start (for left-resize and clamping)
+  fileDurUs?: number    // fileDurationUs (for right-resize clamping)
 }
 
 // ── Props ──────────────────────────────────────────────────────────────────
@@ -55,6 +58,7 @@ interface TimelineProps {
   onUpdateSegment: (id: string, patch: Partial<Segment>) => void
   onDuplicateSegment: (trackId: string, segment: Segment) => void
   onDropVideo: (filePath: string) => void
+  onMoveSegmentToNewTrack: (fromTrackId: string, segId: string) => void
 }
 
 function formatTime(sec: number): string {
@@ -73,7 +77,8 @@ function getRulerInterval(zoom: number): { major: number; minor: number } {
 // ── Timeline ───────────────────────────────────────────────────────────────
 export default function Timeline({
   project, currentTimeSec, selectedId, zoom,
-  onSeek, onSelectSegment, onUpdateSegment, onDuplicateSegment, onDropVideo
+  onSeek, onSelectSegment, onUpdateSegment, onDuplicateSegment, onDropVideo,
+  onMoveSegmentToNewTrack
 }: TimelineProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState | null>(null)
@@ -85,10 +90,12 @@ export default function Timeline({
   const onSeekRef = useRef(onSeek)
   const onUpdateSegmentRef = useRef(onUpdateSegment)
   const projectRef = useRef(project)
+  const onMoveSegmentToNewTrackRef = useRef(onMoveSegmentToNewTrack)
   zoomRef.current = zoom
   onSeekRef.current = onSeek
   onUpdateSegmentRef.current = onUpdateSegment
   projectRef.current = project
+  onMoveSegmentToNewTrackRef.current = onMoveSegmentToNewTrack
 
   const updateSnapLine = (snapAtUs: number | null) => {
     const el = snapLineRef.current
@@ -141,25 +148,50 @@ export default function Timeline({
 
       } else if (drag.kind === 'resize-left') {
         const naturalUs = Math.max(0, drag.startUs! + dtUs)
+        const srcStart = drag.srcStartUs ?? 0
+        // Can't go earlier than when sourceStartUs would become negative
+        const minStart = Math.max(0, drag.startUs! - srcStart)
+        // Can't go later than leaving a minimum segment
+        const maxStart = drag.startUs! + drag.durationUs! - 100_000
         const { value: snapped, snapAt } = applySnap(naturalUs, snapPts, zoom)
-        const delta = snapped - drag.startUs!
-        const newDur = Math.max(100_000, drag.durationUs! - delta)
-        const adjStart = drag.startUs! + (drag.durationUs! - newDur)
-        onUpdateSegmentRef.current(drag.segId, { startUs: adjStart, durationUs: newDur })
+        const clampedNatural = Math.max(minStart, Math.min(maxStart, snapped))
+        const newDur = drag.startUs! + drag.durationUs! - clampedNatural
+        const newSrcStart = srcStart + (clampedNatural - drag.startUs!)
+        const patch: Partial<Segment> = {
+          startUs: clampedNatural,
+          durationUs: newDur,
+          sourceDurationUs: newDur
+        }
+        if (drag.srcStartUs !== undefined) {
+          (patch as Partial<VideoSegment>).sourceStartUs = Math.max(0, newSrcStart)
+        }
+        onUpdateSegmentRef.current(drag.segId, patch)
         updateSnapLine(snapAt)
 
       } else if (drag.kind === 'resize-right') {
         const naturalEndUs = drag.startUs! + drag.durationUs! + dtUs
         const { value: snapped, snapAt } = applySnap(naturalEndUs, snapPts, zoom)
-        const newDur = Math.max(100_000, snapped - drag.startUs!)
-        onUpdateSegmentRef.current(drag.segId, { durationUs: newDur })
+        // Clamp: can't extend past source file end
+        const maxEndUs = drag.fileDurUs !== undefined
+          ? drag.startUs! + (drag.fileDurUs - (drag.srcStartUs ?? 0))
+          : Infinity
+        const clampedEnd = Math.min(snapped, maxEndUs)
+        const newDur = Math.max(100_000, clampedEnd - drag.startUs!)
+        onUpdateSegmentRef.current(drag.segId, { durationUs: newDur, sourceDurationUs: newDur })
         updateSnapLine(snapAt)
       }
     }
 
-    const onUp = () => {
+    const onUp = (e: MouseEvent) => {
+      const drag = dragRef.current
       dragRef.current = null
       updateSnapLine(null)
+      // Drag-up detection: if cursor moved up > half a track height, move to new overlay track
+      if (drag?.kind === 'move' && drag.trackId && drag.segId && drag.startY !== undefined) {
+        if (e.clientY - drag.startY < -TRACK_H / 2) {
+          onMoveSegmentToNewTrackRef.current(drag.trackId, drag.segId)
+        }
+      }
     }
 
     window.addEventListener('mousemove', onMove)
@@ -224,15 +256,20 @@ export default function Timeline({
       onDuplicateSegment(trackId, newSeg)
       dragRef.current = {
         kind: 'move', segId: newSeg.id, trackId,
-        startX: e.clientX, startUs: seg.startUs, durationUs: seg.durationUs
+        startX: e.clientX, startY: e.clientY,
+        startUs: seg.startUs, durationUs: seg.durationUs
       }
       return
     }
 
     onSelectSegment(seg.id)
+    const vSeg = seg.type === 'video' ? (seg as VideoSegment) : null
     dragRef.current = {
       kind, segId: seg.id, trackId,
-      startX: e.clientX, startUs: seg.startUs, durationUs: seg.durationUs
+      startX: e.clientX, startY: e.clientY,
+      startUs: seg.startUs, durationUs: seg.durationUs,
+      srcStartUs: vSeg?.sourceStartUs,
+      fileDurUs: vSeg?.fileDurationUs
     }
   }
 
@@ -246,6 +283,10 @@ export default function Timeline({
   }
   totalSec += 5
 
+  // Reverse display: video (base) at bottom, overlays on top
+  const displayedTracks = [...project.tracks].reverse()
+    .filter((t) => t.type === 'video' || t.segments.length > 0)
+
   const innerWidth = LABEL_W + totalSec * zoom
   const playheadLeft = LABEL_W + currentTimeSec * zoom
   const { major, minor } = getRulerInterval(zoom)
@@ -253,6 +294,8 @@ export default function Timeline({
   for (let t = 0; t <= totalSec + minor; t = parseFloat((t + minor).toFixed(6))) {
     ticks.push({ t, isMajor: Math.abs(t % major) < 0.001 || Math.abs(t % major - major) < 0.001 })
   }
+
+  const trackAreaH = RULER_H + displayedTracks.length * TRACK_H
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -275,8 +318,8 @@ export default function Timeline({
           </div>
         </div>
 
-        {/* Track rows */}
-        {project.tracks.map((track) => (
+        {/* Track rows — reversed so video track is at the bottom */}
+        {displayedTracks.map((track) => (
           <div key={track.id} className="track-row" style={{ height: TRACK_H }}>
             <div className="track-label" style={{ width: LABEL_W, height: TRACK_H }}>{track.label}</div>
             <div className="track-segments" style={{ position: 'relative', height: TRACK_H }}>
@@ -314,7 +357,7 @@ export default function Timeline({
           ref={snapLineRef}
           style={{
             position: 'absolute', top: 0,
-            height: `${RULER_H + project.tracks.length * TRACK_H}px`,
+            height: `${trackAreaH}px`,
             width: 2, background: '#f5c518',
             display: 'none', pointerEvents: 'none', zIndex: 25,
             boxShadow: '0 0 4px #f5c518'
@@ -324,7 +367,7 @@ export default function Timeline({
         {/* Playhead */}
         <div
           className="playhead"
-          style={{ left: playheadLeft, top: 0, height: `${RULER_H + project.tracks.length * TRACK_H}px` }}
+          style={{ left: playheadLeft, top: 0, height: `${trackAreaH}px` }}
         />
       </div>
     </div>

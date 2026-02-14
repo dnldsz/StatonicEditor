@@ -54,6 +54,7 @@ const initialState: AppState = {
   clipboard: null,
   currentTimeSec: 0,
   selectedId: null,
+  croppingId: null,
   zoom: 100,
   isPlaying: false
 }
@@ -92,11 +93,35 @@ function applyProjectAction(project: Project, action: Action): Project {
     }
 
     case 'DELETE_SEGMENT': {
-      const tracks = project.tracks.map((t) => ({
-        ...t,
-        segments: t.segments.filter((s) => s.id !== action.id)
-      }))
+      const tracks = project.tracks
+        .map((t) => ({ ...t, segments: t.segments.filter((s) => s.id !== action.id) }))
+        // Keep the first track always (base video); drop empty non-base tracks
+        .filter((t, i) => i === 0 || t.segments.length > 0)
       return { ...project, tracks }
+    }
+
+    case 'MOVE_SEGMENT_TO_TRACK': {
+      let movedSeg: Segment | null = null
+      const tracks = project.tracks.map((t) => {
+        if (t.id !== action.fromTrackId) return t
+        const seg = t.segments.find((s) => s.id === action.segId)
+        if (seg) movedSeg = seg
+        return { ...t, segments: t.segments.filter((s) => s.id !== action.segId) }
+      })
+      if (!movedSeg) return project
+      const seg = movedSeg as Segment
+      const textCount = project.tracks.filter((t) => t.type === 'text').length
+      const newTrack: Track = {
+        id: uid(),
+        type: seg.type === 'video' ? 'video' : 'text',
+        label: seg.type === 'video' ? 'OVERLAY' : `TEXT ${textCount + 1}`,
+        segments: [seg]
+      }
+      // Append at end (highest array index = highest z-layer)
+      const withNew = [...tracks, newTrack]
+      // Clean up empty non-base tracks
+      const cleaned = withNew.filter((t, i) => i === 0 || t.segments.length > 0)
+      return { ...project, tracks: cleaned }
     }
 
     case 'SLICE_AT': {
@@ -142,7 +167,7 @@ function applyProjectAction(project: Project, action: Action): Project {
 
 const UNDOABLE = new Set<Action['type']>([
   'ADD_VIDEO_SEGMENT', 'ADD_TEXT_WITH_TRACK', 'ADD_SEGMENT_TO_TRACK',
-  'UPDATE_SEGMENT', 'DELETE_SEGMENT', 'SLICE_AT'
+  'UPDATE_SEGMENT', 'DELETE_SEGMENT', 'SLICE_AT', 'MOVE_SEGMENT_TO_TRACK'
 ])
 
 function reducer(state: AppState, action: Action): AppState {
@@ -189,6 +214,7 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_TIME':      return { ...state, currentTimeSec: Math.max(0, action.t) }
     case 'SET_PLAYING':   return { ...state, isPlaying: action.playing }
     case 'SET_SELECTED':  return { ...state, selectedId: action.id }
+    case 'SET_CROPPING':  return { ...state, croppingId: action.id }
     case 'SET_ZOOM':      return { ...state, zoom: Math.min(500, Math.max(20, action.zoom)) }
     case 'SET_CLIPBOARD': return { ...state, clipboard: action.segment }
   }
@@ -269,7 +295,7 @@ export default function App(): JSX.Element {
   const stateRef = useRef(state)
   stateRef.current = state
 
-  const { project, currentTimeSec, selectedId, zoom, isPlaying, past, future } = state
+  const { project, currentTimeSec, selectedId, croppingId, zoom, isPlaying, past, future } = state
 
   // ── seek logic ──────────────────────────────────────────────────────────────
 
@@ -347,6 +373,14 @@ export default function App(): JSX.Element {
     const onKey = (e: KeyboardEvent) => {
       const inInput = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement
       const { project, currentTimeSec, selectedId, clipboard } = stateRef.current
+
+      // Escape — exit crop mode
+      if (e.key === 'Escape') {
+        if (stateRef.current.croppingId) {
+          dispatch({ type: 'SET_CROPPING', id: null })
+          return
+        }
+      }
 
       // Space — play/pause (not in inputs)
       if (e.code === 'Space' && !inInput) {
@@ -449,8 +483,10 @@ export default function App(): JSX.Element {
     const seg: VideoSegment = {
       id: uid(), type: 'video', src: info.path, name: info.name,
       startUs, durationUs, sourceStartUs: 0, sourceDurationUs: durationUs,
+      fileDurationUs: durationUs,
       sourceWidth: info.width, sourceHeight: info.height,
-      clipX: 0, clipY: 0, clipScale: 1
+      clipX: 0, clipY: 0, clipScale: 1,
+      cropLeft: 0, cropRight: 0, cropTop: 0, cropBottom: 0
     }
     dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: seg })
     dispatch({ type: 'SET_SELECTED', id: seg.id })
@@ -517,8 +553,10 @@ export default function App(): JSX.Element {
     const seg: VideoSegment = {
       id: uid(), type: 'video', src: info.path, name: info.name,
       startUs, durationUs, sourceStartUs: 0, sourceDurationUs: durationUs,
+      fileDurationUs: durationUs,
       sourceWidth: info.width, sourceHeight: info.height,
-      clipX: 0, clipY: 0, clipScale: 1
+      clipX: 0, clipY: 0, clipScale: 1,
+      cropLeft: 0, cropRight: 0, cropTop: 0, cropBottom: 0
     }
     dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: seg })
     dispatch({ type: 'SET_SELECTED', id: seg.id })
@@ -542,6 +580,12 @@ export default function App(): JSX.Element {
   const handleDuplicateSegment = useCallback((trackId: string, seg: Segment) => {
     dispatch({ type: 'ADD_SEGMENT_TO_TRACK', trackId, segment: seg })
     dispatch({ type: 'SET_SELECTED', id: seg.id })
+  }, [])
+
+  // ── move segment to new overlay track (from timeline drag-up) ───────────────
+
+  const handleMoveSegmentToNewTrack = useCallback((fromTrackId: string, segId: string) => {
+    dispatch({ type: 'MOVE_SEGMENT_TO_TRACK', segId, fromTrackId })
   }, [])
 
   // ── selected segment ────────────────────────────────────────────────────────
@@ -578,9 +622,11 @@ export default function App(): JSX.Element {
               project={project}
               currentTimeSec={currentTimeSec}
               selectedId={selectedId}
+              croppingId={croppingId}
               videoRef={videoRef}
               onSelectSegment={(id) => dispatch({ type: 'SET_SELECTED', id })}
               onUpdateSegment={(id, patch) => dispatch({ type: 'MOVE_SEGMENT', id, patch })}
+              onSetCropping={(id) => dispatch({ type: 'SET_CROPPING', id })}
             />
           </div>
 
@@ -633,6 +679,7 @@ export default function App(): JSX.Element {
           onUpdateSegment={(id, patch) => dispatch({ type: 'MOVE_SEGMENT', id, patch: patch as any })}
           onDuplicateSegment={handleDuplicateSegment}
           onDropVideo={handleDropVideo}
+          onMoveSegmentToNewTrack={handleMoveSegmentToNewTrack}
         />
       </div>
     </div>
