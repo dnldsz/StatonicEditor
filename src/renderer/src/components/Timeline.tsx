@@ -34,13 +34,44 @@ function applySnap(valueUs: number, snapPts: number[], zoom: number): { value: n
   return best !== null ? { value: best, snapAt: best } : { value: valueUs, snapAt: null }
 }
 
+// ── Non-overlap clamping ───────────────────────────────────────────────────
+// Returns a start position that doesn't overlap other clips in the same track.
+// Uses the center of the dragged segment to determine which side each neighbor falls on.
+function clampToTrackGap(
+  proposedStart: number,
+  durationUs: number,
+  segId: string,
+  trackId: string,
+  project: Project
+): number {
+  const track = project.tracks.find((t) => t.id === trackId)
+  if (!track) return Math.max(0, proposedStart)
+  const others = track.segments.filter((s) => s.id !== segId)
+  if (others.length === 0) return Math.max(0, proposedStart)
+
+  const center = proposedStart + durationUs / 2
+  let minStart = 0
+  let maxStart = Infinity
+
+  for (const other of others) {
+    const otherEnd = other.startUs + other.durationUs
+    if (otherEnd <= center) {
+      minStart = Math.max(minStart, otherEnd)
+    } else if (other.startUs >= center) {
+      maxStart = Math.min(maxStart, other.startUs - durationUs)
+    }
+  }
+
+  return Math.max(0, Math.max(minStart, Math.min(maxStart === Infinity ? proposedStart : maxStart, proposedStart)))
+}
+
 // ── DragState ──────────────────────────────────────────────────────────────
 interface DragState {
   kind: 'seek' | 'move' | 'resize-left' | 'resize-right'
   segId?: string
   trackId?: string
   startX: number
-  startY?: number       // for drag-up detection
+  startY?: number       // for drag-to-track detection
   startUs?: number
   durationUs?: number
   srcStartUs?: number   // sourceStartUs at drag start (for left-resize and clamping)
@@ -58,7 +89,9 @@ interface TimelineProps {
   onUpdateSegment: (id: string, patch: Partial<Segment>) => void
   onDuplicateSegment: (trackId: string, segment: Segment) => void
   onDropVideo: (filePath: string) => void
+  onZoomChange: (zoom: number) => void
   onMoveSegmentToNewTrack: (fromTrackId: string, segId: string) => void
+  onMoveSegmentBetweenTracks: (fromTrackId: string, segId: string, toTrackId: string) => void
 }
 
 function formatTime(sec: number): string {
@@ -78,7 +111,7 @@ function getRulerInterval(zoom: number): { major: number; minor: number } {
 export default function Timeline({
   project, currentTimeSec, selectedId, zoom,
   onSeek, onSelectSegment, onUpdateSegment, onDuplicateSegment, onDropVideo,
-  onMoveSegmentToNewTrack
+  onZoomChange, onMoveSegmentToNewTrack, onMoveSegmentBetweenTracks
 }: TimelineProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState | null>(null)
@@ -90,12 +123,16 @@ export default function Timeline({
   const onSeekRef = useRef(onSeek)
   const onUpdateSegmentRef = useRef(onUpdateSegment)
   const projectRef = useRef(project)
+  const onZoomChangeRef = useRef(onZoomChange)
   const onMoveSegmentToNewTrackRef = useRef(onMoveSegmentToNewTrack)
+  const onMoveSegmentBetweenTracksRef = useRef(onMoveSegmentBetweenTracks)
   zoomRef.current = zoom
   onSeekRef.current = onSeek
   onUpdateSegmentRef.current = onUpdateSegment
   projectRef.current = project
+  onZoomChangeRef.current = onZoomChange
   onMoveSegmentToNewTrackRef.current = onMoveSegmentToNewTrack
+  onMoveSegmentBetweenTracksRef.current = onMoveSegmentBetweenTracks
 
   const updateSnapLine = (snapAtUs: number | null) => {
     const el = snapLineRef.current
@@ -143,7 +180,11 @@ export default function Timeline({
         } else {
           finalStart = naturalUs; snapAt = null
         }
-        onUpdateSegmentRef.current(drag.segId, { startUs: Math.max(0, finalStart) })
+        // Clamp to track gap — prevent overlapping other clips in the same track
+        const clamped = drag.trackId
+          ? clampToTrackGap(Math.max(0, finalStart), drag.durationUs!, drag.segId, drag.trackId, projectRef.current)
+          : Math.max(0, finalStart)
+        onUpdateSegmentRef.current(drag.segId, { startUs: clamped })
         updateSnapLine(snapAt)
 
       } else if (drag.kind === 'resize-left') {
@@ -186,10 +227,27 @@ export default function Timeline({
       const drag = dragRef.current
       dragRef.current = null
       updateSnapLine(null)
-      // Drag-up detection: if cursor moved up > half a track height, move to new overlay track
+
       if (drag?.kind === 'move' && drag.trackId && drag.segId && drag.startY !== undefined) {
-        if (e.clientY - drag.startY < -TRACK_H / 2) {
+        if (!containerRef.current) return
+
+        const proj = projectRef.current
+        const displayedTracks = [...proj.tracks].reverse()
+          .filter((t) => t.type === 'video' || t.segments.length > 0)
+
+        const containerRect = containerRef.current.getBoundingClientRect()
+        const relY = e.clientY - containerRect.top + containerRef.current.scrollTop
+        const rowIndex = Math.floor((relY - RULER_H) / TRACK_H)
+
+        if (rowIndex < 0 && e.clientY - drag.startY < -TRACK_H / 2) {
+          // Dragged above the ruler → create new overlay track
           onMoveSegmentToNewTrackRef.current(drag.trackId, drag.segId)
+        } else if (rowIndex >= 0 && rowIndex < displayedTracks.length) {
+          const targetTrack = displayedTracks[rowIndex]
+          if (targetTrack.id !== drag.trackId) {
+            // Dragged into a different existing track row
+            onMoveSegmentBetweenTracksRef.current(drag.trackId, drag.segId, targetTrack.id)
+          }
         }
       }
     }
@@ -200,6 +258,21 @@ export default function Timeline({
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
+  }, [])
+
+  // ── Pinch-to-zoom (trackpad) ───────────────────────────────────────────────
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return
+      e.preventDefault()
+      const factor = 1 - e.deltaY * 0.01
+      const newZoom = Math.round(Math.max(20, Math.min(500, zoomRef.current * factor)))
+      onZoomChangeRef.current(newZoom)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
   }, [])
 
   // ── File drag & drop ───────────────────────────────────────────────────────

@@ -124,6 +124,22 @@ function applyProjectAction(project: Project, action: Action): Project {
       return { ...project, tracks: cleaned }
     }
 
+    case 'MOVE_SEGMENT_BETWEEN_TRACKS': {
+      let movedSeg: Segment | null = null
+      const tracks = project.tracks.map((t) => {
+        if (t.id !== action.fromTrackId) return t
+        const seg = t.segments.find((s) => s.id === action.segId)
+        if (seg) movedSeg = seg
+        return { ...t, segments: t.segments.filter((s) => s.id !== action.segId) }
+      }).map((t) => {
+        if (t.id !== action.toTrackId || !movedSeg) return t
+        return { ...t, segments: [...t.segments, movedSeg as Segment] }
+      })
+      if (!movedSeg) return project
+      const cleaned = tracks.filter((t, i) => i === 0 || t.segments.length > 0)
+      return { ...project, tracks: cleaned }
+    }
+
     case 'SLICE_AT': {
       const { timeUs } = action
       const tracks = project.tracks.map((track) => {
@@ -167,7 +183,8 @@ function applyProjectAction(project: Project, action: Action): Project {
 
 const UNDOABLE = new Set<Action['type']>([
   'ADD_VIDEO_SEGMENT', 'ADD_TEXT_WITH_TRACK', 'ADD_SEGMENT_TO_TRACK',
-  'UPDATE_SEGMENT', 'DELETE_SEGMENT', 'SLICE_AT', 'MOVE_SEGMENT_TO_TRACK'
+  'UPDATE_SEGMENT', 'DELETE_SEGMENT', 'SLICE_AT', 'MOVE_SEGMENT_TO_TRACK',
+  'MOVE_SEGMENT_BETWEEN_TRACKS'
 ])
 
 function reducer(state: AppState, action: Action): AppState {
@@ -588,6 +605,12 @@ export default function App(): JSX.Element {
     dispatch({ type: 'MOVE_SEGMENT_TO_TRACK', segId, fromTrackId })
   }, [])
 
+  // ── move segment to existing track (from timeline drag-down/across) ──────────
+
+  const handleMoveSegmentBetweenTracks = useCallback((fromTrackId: string, segId: string, toTrackId: string) => {
+    dispatch({ type: 'MOVE_SEGMENT_BETWEEN_TRACKS', segId, fromTrackId, toTrackId })
+  }, [])
+
   // ── selected segment ────────────────────────────────────────────────────────
 
   const selectedSegment = selectedId
@@ -679,7 +702,9 @@ export default function App(): JSX.Element {
           onUpdateSegment={(id, patch) => dispatch({ type: 'MOVE_SEGMENT', id, patch: patch as any })}
           onDuplicateSegment={handleDuplicateSegment}
           onDropVideo={handleDropVideo}
+          onZoomChange={(z) => dispatch({ type: 'SET_ZOOM', zoom: z })}
           onMoveSegmentToNewTrack={handleMoveSegmentToNewTrack}
+          onMoveSegmentBetweenTracks={handleMoveSegmentBetweenTracks}
         />
       </div>
     </div>

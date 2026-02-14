@@ -85,5 +85,6 @@ export type Action =
   | { type: 'DELETE_SEGMENT'; id: string }
   | { type: 'SLICE_AT'; timeUs: number }
   | { type: 'MOVE_SEGMENT_TO_TRACK'; segId: string; fromTrackId: string }
+  | { type: 'MOVE_SEGMENT_BETWEEN_TRACKS'; segId: string; fromTrackId: string; toTrackId: string }
   // ── drag (no history) ────────────────────────────────────────────────────
   | { type: 'MOVE_SEGMENT'; id: string; patch: Partial<Segment> }
