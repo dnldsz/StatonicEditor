@@ -6,6 +6,7 @@ interface CanvasProps {
   currentTimeSec: number
   selectedId: string | null
   croppingId: string | null
+  isPlaying: boolean
   videoRef: RefObject<HTMLVideoElement>
   onSelectSegment: (id: string | null) => void
   onUpdateSegment: (id: string, patch: Partial<Segment>) => void
@@ -39,13 +40,13 @@ const handleStyle = (dir: HandleDir): React.CSSProperties => {
   }
 }
 
-// ── drag state ─────────────────────────────────────────────────────────────
-
 type ScaleDragState = {
   id: string; kind: 'text' | 'video'; dir: HandleDir
   canvasLeft: number; canvasTop: number
   centerX: number; centerY: number
   startDist: number; origScale: number
+  srcW?: number; srcH?: number
+  canvasW?: number; canvasH?: number
 }
 
 type MoveDragState = {
@@ -53,7 +54,6 @@ type MoveDragState = {
   kind: 'text' | 'video'
 }
 
-// 8-direction crop handle: corners adjust two edges, edges adjust one
 type CropHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
 
 type CropDragState = {
@@ -64,13 +64,14 @@ type CropDragState = {
 }
 
 export default function Canvas({
-  project, currentTimeSec, selectedId, croppingId, videoRef,
-  onSelectSegment, onUpdateSegment, onSetCropping
+  project, currentTimeSec, selectedId, croppingId, isPlaying,
+  videoRef, onSelectSegment, onUpdateSegment, onSetCropping
 }: CanvasProps): JSX.Element {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const moveDragRef = useRef<MoveDragState | null>(null)
   const scaleDragRef = useRef<ScaleDragState | null>(null)
   const cropDragRef = useRef<CropDragState | null>(null)
+  const overlayVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map())
   const [snapGuide, setSnapGuide] = useState<{ x: boolean; y: boolean }>({ x: false, y: false })
   const [previewSize, setPreviewSize] = useState({ w: 0, h: 0 })
 
@@ -90,50 +91,59 @@ export default function Canvas({
     return () => observer.disconnect()
   }, [])
 
-  const previewScale = previewSize.w > 0 ? previewSize.w / canvas.width : 1
   const previewH = previewSize.h > 0 ? previewSize.h : previewSize.w / aspect
+  const previewScale = previewSize.w > 0 ? previewSize.w / canvas.width : 1
 
   // ── find segments at current time ─────────────────────────────────────────
 
-  let activeVideoSeg: VideoSegment | null = null
+  let baseVideoSeg: VideoSegment | null = null
+  const overlayVideoSegs: VideoSegment[] = []
   const visibleTexts: Array<{ seg: TextSegment; z: number }> = []
 
   for (let ti = 0; ti < project.tracks.length; ti++) {
     const track = project.tracks[ti]
-    const z = ti + 1  // higher index = higher z-layer
+    const z = ti + 1
     for (const seg of track.segments) {
       const start = seg.startUs / 1e6
       const end = (seg.startUs + seg.durationUs) / 1e6
       if (currentTimeSec < start || currentTimeSec >= end) continue
-      if (seg.type === 'video') activeVideoSeg = seg as VideoSegment
-      else if (seg.type === 'text') visibleTexts.push({ seg: seg as TextSegment, z })
+      if (seg.type === 'video') {
+        if (ti === 0) baseVideoSeg = seg as VideoSegment
+        else overlayVideoSegs.push(seg as VideoSegment)
+      } else if (seg.type === 'text') {
+        visibleTexts.push({ seg: seg as TextSegment, z })
+      }
     }
   }
 
-  const clipX = activeVideoSeg?.clipX ?? 0
-  const clipY = activeVideoSeg?.clipY ?? 0
-  const clipScale = activeVideoSeg?.clipScale ?? 1
-  const srcW = activeVideoSeg?.sourceWidth ?? canvas.width
-  const srcH = activeVideoSeg?.sourceHeight ?? canvas.height
+  // ── sync overlay videos ────────────────────────────────────────────────────
 
-  // Crop values
-  const cl = activeVideoSeg?.cropLeft ?? 0
-  const cr = activeVideoSeg?.cropRight ?? 0
-  const ct = activeVideoSeg?.cropTop ?? 0
-  const cb = activeVideoSeg?.cropBottom ?? 0
-  const cropW = Math.max(0.01, 1 - cl - cr)
-  const cropH = Math.max(0.01, 1 - ct - cb)
-
-  const vidDisplayH = clipScale * (previewH || previewSize.w / aspect)
-  const vidDisplayW = (srcW / srcH) * vidDisplayH
-  const vidLeft = ((clipX + 1) / 2) * previewSize.w
-  const vidTop = ((1 - clipY) / 2) * (previewH || previewSize.w / aspect)
-
-  const isVideoSelected = activeVideoSeg !== null && activeVideoSeg.id === selectedId
-  const isCropping = croppingId !== null && activeVideoSeg !== null && croppingId === activeVideoSeg.id
-
-  // When in crop mode: show full frame with overlay. Otherwise: apply crop transform.
-  const applyCropTransform = !isCropping
+  // Run on every render so overlay videos stay in sync with currentTimeSec and isPlaying
+  useEffect(() => {
+    for (const seg of overlayVideoSegs) {
+      const el = overlayVideoRefs.current.get(seg.id)
+      if (!el) continue
+      const videoSrc = `file://${seg.src}`
+      const targetTime = seg.sourceStartUs / 1e6 + (currentTimeSec - seg.startUs / 1e6)
+      if (el.src !== videoSrc) {
+        el.src = videoSrc
+        el.currentTime = targetTime
+        if (isPlaying) el.play().catch(() => {})
+        continue
+      }
+      if (isPlaying) {
+        if (el.paused) { el.currentTime = targetTime; el.play().catch(() => {}) }
+        else if (Math.abs(el.currentTime - targetTime) > 0.3) { el.currentTime = targetTime }
+      } else {
+        if (!el.paused) el.pause()
+        el.currentTime = targetTime
+      }
+    }
+    // Pause any overlay that's no longer visible
+    for (const [id, el] of overlayVideoRefs.current) {
+      if (!overlayVideoSegs.find((s) => s.id === id) && !el.paused) el.pause()
+    }
+  })
 
   const getRect = useCallback(() => wrapperRef.current?.getBoundingClientRect() ?? null, [])
 
@@ -166,6 +176,11 @@ export default function Canvas({
         setSnapGuide({ x: snapX, y: snapY })
         onUpdateSegment(id, { x: newX, y: newY } as Partial<TextSegment>)
       } else {
+        const snapX = Math.abs(newX) < SNAP_THRESHOLD
+        const snapY = Math.abs(newY) < SNAP_THRESHOLD
+        if (snapX) newX = 0
+        if (snapY) newY = 0
+        setSnapGuide({ x: snapX, y: snapY })
         onUpdateSegment(id, { clipX: newX, clipY: newY } as Partial<VideoSegment>)
       }
     }
@@ -201,7 +216,10 @@ export default function Canvas({
     scaleDragRef.current = {
       id: seg.id, kind: seg.type === 'text' ? 'text' : 'video', dir,
       canvasLeft: rect.left, canvasTop: rect.top,
-      centerX, centerY, startDist: Math.max(startDist, 1), origScale
+      centerX, centerY, startDist: Math.max(startDist, 1), origScale,
+      srcW: seg.type === 'video' ? (seg as VideoSegment).sourceWidth : undefined,
+      srcH: seg.type === 'video' ? (seg as VideoSegment).sourceHeight : undefined,
+      canvasW: canvas.width, canvasH: canvas.height
     }
     const onMove = (me: MouseEvent) => {
       const drag = scaleDragRef.current
@@ -214,7 +232,15 @@ export default function Canvas({
       if (drag.kind === 'text') {
         onUpdateSegment(drag.id, { textScale: Math.max(0.1, drag.origScale * ratio) } as Partial<TextSegment>)
       } else {
-        onUpdateSegment(drag.id, { clipScale: Math.max(0.05, drag.origScale * ratio) } as Partial<VideoSegment>)
+        let newScale = Math.max(0.05, drag.origScale * ratio)
+        if (drag.srcW && drag.srcH && drag.canvasW && drag.canvasH) {
+          // Snap to full-width scale
+          const fullWidthScale = (drag.canvasW / drag.canvasH) * (drag.srcH / drag.srcW)
+          if (Math.abs(newScale - fullWidthScale) < 0.05) newScale = fullWidthScale
+          // Snap to fill-height scale (= 1.0)
+          if (Math.abs(newScale - 1.0) < 0.05) newScale = 1.0
+        }
+        onUpdateSegment(drag.id, { clipScale: newScale } as Partial<VideoSegment>)
       }
     }
     const onUp = () => {
@@ -224,23 +250,23 @@ export default function Canvas({
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
-  }, [onUpdateSegment])
+  }, [onUpdateSegment, canvas])
 
   // ── crop drag ──────────────────────────────────────────────────────────────
 
-  const startCropDrag = (e: React.MouseEvent, handle: CropHandle) => {
+  const startCropDrag = useCallback((
+    e: React.MouseEvent, handle: CropHandle, seg: VideoSegment,
+    elWidth: number, elHeight: number
+  ) => {
     e.stopPropagation()
     e.preventDefault()
-    if (!activeVideoSeg) return
-    // The handle's parent is the outer video container div
-    const el = (e.currentTarget as HTMLElement).closest('[data-crop-container]') as HTMLElement
-      || (e.currentTarget as HTMLElement).parentElement!
-    const rect = el.getBoundingClientRect()
+    const cl = seg.cropLeft ?? 0, cr = seg.cropRight ?? 0
+    const ct = seg.cropTop ?? 0, cb = seg.cropBottom ?? 0
     cropDragRef.current = {
-      id: activeVideoSeg.id, handle,
+      id: seg.id, handle,
       startX: e.clientX, startY: e.clientY,
       origLeft: cl, origRight: cr, origTop: ct, origBottom: cb,
-      elWidth: rect.width, elHeight: rect.height
+      elWidth, elHeight
     }
     const onMove = (me: MouseEvent) => {
       const drag = cropDragRef.current
@@ -266,21 +292,137 @@ export default function Canvas({
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
+  }, [onUpdateSegment])
+
+  // ── render a video segment ─────────────────────────────────────────────────
+
+  const renderVideoSeg = (seg: VideoSegment, videoEl: React.ReactElement, z: number) => {
+    const isSelected = seg.id === selectedId
+    const isCroppingThis = croppingId === seg.id
+
+    const cropL = seg.cropLeft ?? 0, cropR = seg.cropRight ?? 0
+    const cropT = seg.cropTop ?? 0, cropB = seg.cropBottom ?? 0
+    const cW = Math.max(0.01, 1 - cropL - cropR)
+    const cH = Math.max(0.01, 1 - cropT - cropB)
+    const applyC = !isCroppingThis
+
+    // Full-frame display size (correct aspect ratio, no distortion)
+    const innerH = seg.clipScale * previewH
+    const innerW = (seg.sourceWidth / seg.sourceHeight) * innerH
+
+    // Center of the full frame on the canvas
+    const frameCX = ((seg.clipX + 1) / 2) * previewSize.w
+    const frameCY = ((1 - seg.clipY) / 2) * previewH
+
+    // Outer container: shows only the crop window (or full frame in crop mode)
+    const outerW = applyC ? cW * innerW : innerW
+    const outerH = applyC ? cH * innerH : innerH
+    // Position outer so the crop window aligns with the correct portion of the full frame
+    const outerLeft = frameCX - innerW / 2 + (applyC ? cropL * innerW : 0)
+    const outerTop  = frameCY - innerH / 2 + (applyC ? cropT * innerH : 0)
+
+    // Inner (full-frame) offset within the outer container
+    const innerLeft = applyC ? -cropL * innerW : 0
+    const innerTop  = applyC ? -cropT * innerH : 0
+
+    // Crop handle positions (absolute px within outer div = full frame in crop mode)
+    const cropHandlePositions: Array<{ handle: CropHandle; left: number; top: number; cursor: string }> = [
+      { handle: 'nw', left: cropL * innerW,             top: cropT * innerH,             cursor: 'nw-resize' },
+      { handle: 'n',  left: (cropL + cW / 2) * innerW,  top: cropT * innerH,             cursor: 'n-resize'  },
+      { handle: 'ne', left: (1 - cropR) * innerW,        top: cropT * innerH,             cursor: 'ne-resize' },
+      { handle: 'e',  left: (1 - cropR) * innerW,        top: (cropT + cH / 2) * innerH, cursor: 'e-resize'  },
+      { handle: 'se', left: (1 - cropR) * innerW,        top: (1 - cropB) * innerH,       cursor: 'se-resize' },
+      { handle: 's',  left: (cropL + cW / 2) * innerW,  top: (1 - cropB) * innerH,       cursor: 's-resize'  },
+      { handle: 'sw', left: cropL * innerW,             top: (1 - cropB) * innerH,       cursor: 'sw-resize' },
+      { handle: 'w',  left: cropL * innerW,             top: (cropT + cH / 2) * innerH, cursor: 'w-resize'  },
+    ]
+
+    return (
+      <div
+        key={seg.id}
+        style={{
+          position: 'absolute',
+          left: outerLeft, top: outerTop,
+          width: outerW, height: outerH,
+          zIndex,
+          // overflow:visible so scale handles (which extend outside) are not clipped
+          overflow: 'visible',
+          outline: isSelected && !isCroppingThis ? '2px solid #0a7ef0' : 'none',
+          cursor: isCroppingThis ? 'default' : 'move',
+          boxSizing: 'border-box',
+        }}
+        onMouseDown={!isCroppingThis ? (e) =>
+          startMoveDrag(e, seg.id, 'video', seg.clipX, seg.clipY) : undefined}
+        onClick={(e) => { e.stopPropagation(); onSelectSegment(seg.id) }}
+        onDoubleClick={(e) => {
+          e.stopPropagation()
+          onSetCropping(isCroppingThis ? null : seg.id)
+        }}
+      >
+        {/* Content div — clips the video to the crop region */}
+        <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
+          {/* Full-frame video div, offset to show only the crop window */}
+          <div style={{
+            position: 'absolute',
+            left: innerLeft, top: innerTop,
+            width: innerW, height: innerH
+          }}>
+            {videoEl}
+          </div>
+
+          {/* Crop mode dark masks + border */}
+          {isCroppingThis && (
+            <>
+              <div style={{ position: 'absolute', top: 0, left: 0, width: `${cropL * 100}%`, height: '100%', background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
+              <div style={{ position: 'absolute', top: 0, right: 0, width: `${cropR * 100}%`, height: '100%', background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
+              <div style={{ position: 'absolute', top: 0, left: `${cropL * 100}%`, right: `${cropR * 100}%`, height: `${cropT * 100}%`, background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
+              <div style={{ position: 'absolute', bottom: 0, left: `${cropL * 100}%`, right: `${cropR * 100}%`, height: `${cropB * 100}%`, background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
+              <div style={{
+                position: 'absolute',
+                left: `${cropL * 100}%`, right: `${cropR * 100}%`,
+                top: `${cropT * 100}%`, bottom: `${cropB * 100}%`,
+                border: '1px solid rgba(255,255,255,0.8)',
+                pointerEvents: 'none', zIndex: 16
+              }} />
+              <div style={{
+                position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)',
+                background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: 11,
+                padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap',
+                pointerEvents: 'none', zIndex: 25
+              }}>
+                Double-click or Esc to exit crop
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Scale handles — outside content div, so not clipped by overflow:hidden */}
+        {isSelected && !isCroppingThis && HANDLES.map((dir) => (
+          <div key={dir} style={handleStyle(dir)} onMouseDown={(e) => startScaleDrag(e, seg, dir)} />
+        ))}
+
+        {/* Crop handles — outside content div, positioned at crop boundary in full-frame px */}
+        {isCroppingThis && cropHandlePositions.map(({ handle, left, top, cursor }) => (
+          <div
+            key={handle}
+            style={{
+              position: 'absolute', left, top,
+              width: CROP_HANDLE_SIZE, height: CROP_HANDLE_SIZE,
+              transform: 'translate(-50%, -50%)',
+              background: '#fff', border: '1.5px solid rgba(0,0,0,0.4)',
+              borderRadius: 2, cursor, zIndex: 20, boxSizing: 'border-box',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.5)'
+            }}
+            onMouseDown={(e) => startCropDrag(e, handle, seg, innerW, innerH)}
+          />
+        ))}
+      </div>
+    )
   }
 
-  // Crop handle positions relative to the full video frame (used in crop mode)
-  const cropHandlePositions: Array<{ handle: CropHandle; left: string; top: string; cursor: string }> = [
-    { handle: 'nw', left: `${cl * 100}%`,            top: `${ct * 100}%`,            cursor: 'nw-resize' },
-    { handle: 'n',  left: `${(cl + cropW / 2) * 100}%`, top: `${ct * 100}%`,         cursor: 'n-resize' },
-    { handle: 'ne', left: `${(1 - cr) * 100}%`,      top: `${ct * 100}%`,            cursor: 'ne-resize' },
-    { handle: 'e',  left: `${(1 - cr) * 100}%`,      top: `${(ct + cropH / 2) * 100}%`, cursor: 'e-resize' },
-    { handle: 'se', left: `${(1 - cr) * 100}%`,      top: `${(1 - cb) * 100}%`,      cursor: 'se-resize' },
-    { handle: 's',  left: `${(cl + cropW / 2) * 100}%`, top: `${(1 - cb) * 100}%`,  cursor: 's-resize' },
-    { handle: 'sw', left: `${cl * 100}%`,            top: `${(1 - cb) * 100}%`,      cursor: 'sw-resize' },
-    { handle: 'w',  left: `${cl * 100}%`,            top: `${(ct + cropH / 2) * 100}%`, cursor: 'w-resize' },
-  ]
-
   // ── render ─────────────────────────────────────────────────────────────────
+
+  const hasAnyContent = baseVideoSeg || overlayVideoSegs.length > 0 || visibleTexts.length > 0
 
   return (
     <div
@@ -291,7 +433,10 @@ export default function Canvas({
         maxHeight: '100%',
         maxWidth: `calc(100% * ${aspect})`,
         width: 'auto', height: '100%',
-        position: 'relative', overflow: 'hidden', background: '#000'
+        position: 'relative',
+        // overflow:visible so scale handles at canvas edges are not clipped
+        overflow: 'visible',
+        background: '#000'
       }}
       onClick={(e) => {
         if (e.target === wrapperRef.current) {
@@ -300,109 +445,34 @@ export default function Canvas({
         }
       }}
     >
-      {/* ── Video clip ─────────────────────────────────────────────────────── */}
-      <div
-        data-crop-container="1"
-        style={{
-          position: 'absolute',
-          width: vidDisplayW,
-          height: vidDisplayH,
-          left: vidLeft,
-          top: vidTop,
-          transform: 'translate(-50%, -50%)',
-          zIndex: 1,
-          overflow: 'hidden',
-          outline: isVideoSelected && !isCropping ? '2px solid #0a7ef0' : 'none',
-          cursor: activeVideoSeg ? (isCropping ? 'default' : 'move') : 'default',
-          boxSizing: 'border-box',
-          visibility: activeVideoSeg ? 'visible' : 'hidden'
-        }}
-        onMouseDown={activeVideoSeg && !isCropping ? (e) =>
-          startMoveDrag(e, activeVideoSeg!.id, 'video', clipX, clipY) : undefined}
-        onClick={(e) => { e.stopPropagation(); if (activeVideoSeg) onSelectSegment(activeVideoSeg.id) }}
-        onDoubleClick={(e) => {
-          e.stopPropagation()
-          if (activeVideoSeg) onSetCropping(isCropping ? null : activeVideoSeg.id)
-        }}
-      >
-        {/* Inner video wrapper — zoomed in to show crop result (when not in crop mode) */}
-        <div style={{
-          position: 'absolute',
-          left: applyCropTransform ? `${-(cl / cropW) * 100}%` : '0%',
-          top:  applyCropTransform ? `${-(ct / cropH) * 100}%` : '0%',
-          width:  applyCropTransform ? `${100 / cropW}%` : '100%',
-          height: applyCropTransform ? `${100 / cropH}%` : '100%',
-        }}>
-          <video
-            ref={videoRef}
-            style={{ width: '100%', height: '100%', display: 'block', objectFit: 'fill' }}
-            playsInline
-            preload="auto"
-          />
-        </div>
+      {/* Base video (track 0) — controlled by App.tsx videoRef */}
+      {baseVideoSeg && renderVideoSeg(
+        baseVideoSeg,
+        <video
+          ref={videoRef}
+          style={{ width: '100%', height: '100%', display: 'block', objectFit: 'fill' }}
+          playsInline
+          preload="auto"
+        />,
+        1
+      )}
 
-        {/* ── Crop mode overlay ─────────────────────────────────────────── */}
-        {isCropping && activeVideoSeg && (
-          <>
-            {/* Dark masks outside the crop rectangle */}
-            <div style={{ position: 'absolute', top: 0, left: 0, width: `${cl * 100}%`, height: '100%', background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
-            <div style={{ position: 'absolute', top: 0, right: 0, width: `${cr * 100}%`, height: '100%', background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
-            <div style={{ position: 'absolute', top: 0, left: `${cl * 100}%`, right: `${cr * 100}%`, height: `${ct * 100}%`, background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
-            <div style={{ position: 'absolute', bottom: 0, left: `${cl * 100}%`, right: `${cr * 100}%`, height: `${cb * 100}%`, background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
+      {/* Overlay videos (tracks 1+) — synced by this component */}
+      {overlayVideoSegs.map((seg, i) => renderVideoSeg(
+        seg,
+        <video
+          ref={(el: HTMLVideoElement | null) => {
+            if (el) overlayVideoRefs.current.set(seg.id, el)
+            else overlayVideoRefs.current.delete(seg.id)
+          }}
+          style={{ width: '100%', height: '100%', display: 'block', objectFit: 'fill' }}
+          playsInline
+          preload="auto"
+        />,
+        i + 2
+      ))}
 
-            {/* Crop rectangle border */}
-            <div style={{
-              position: 'absolute',
-              left: `${cl * 100}%`, right: `${cr * 100}%`,
-              top: `${ct * 100}%`, bottom: `${cb * 100}%`,
-              border: '1px solid rgba(255,255,255,0.8)',
-              pointerEvents: 'none', zIndex: 16
-            }} />
-
-            {/* Traditional rectangular crop handles */}
-            {cropHandlePositions.map(({ handle, left, top, cursor }) => (
-              <div
-                key={handle}
-                style={{
-                  position: 'absolute',
-                  left, top,
-                  width: CROP_HANDLE_SIZE, height: CROP_HANDLE_SIZE,
-                  transform: 'translate(-50%, -50%)',
-                  background: '#fff',
-                  border: '1.5px solid rgba(0,0,0,0.4)',
-                  borderRadius: 2,
-                  cursor,
-                  zIndex: 20,
-                  boxSizing: 'border-box',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.5)'
-                }}
-                onMouseDown={(e) => startCropDrag(e, handle)}
-              />
-            ))}
-
-            {/* Hint */}
-            <div style={{
-              position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)',
-              background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: 11,
-              padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap',
-              pointerEvents: 'none', zIndex: 25
-            }}>
-              Double-click or Esc to exit crop
-            </div>
-          </>
-        )}
-
-        {/* Scale handles (selected, not cropping) */}
-        {isVideoSelected && !isCropping && HANDLES.map((dir) => (
-          <div
-            key={dir}
-            style={handleStyle(dir)}
-            onMouseDown={(e) => startScaleDrag(e, activeVideoSeg!, dir)}
-          />
-        ))}
-      </div>
-
-      {/* ── Snap guides ───────────────────────────────────────────────────── */}
+      {/* Snap guides */}
       {snapGuide.x && (
         <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, background: '#ff3b30', opacity: 0.8, transform: 'translateX(-50%)', pointerEvents: 'none', zIndex: 30 }} />
       )}
@@ -410,11 +480,11 @@ export default function Canvas({
         <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: 1, background: '#ff3b30', opacity: 0.8, transform: 'translateY(-50%)', pointerEvents: 'none', zIndex: 30 }} />
       )}
 
-      {!activeVideoSeg && visibleTexts.length === 0 && (
+      {!hasAnyContent && (
         <div className="canvas-overlay-placeholder">Add a video clip to get started</div>
       )}
 
-      {/* ── Text overlays ─────────────────────────────────────────────────── */}
+      {/* Text overlays */}
       {visibleTexts.map(({ seg, z }) => {
         const leftPct = ((seg.x + 1) / 2) * 100
         const topPct = ((1 - seg.y) / 2) * 100

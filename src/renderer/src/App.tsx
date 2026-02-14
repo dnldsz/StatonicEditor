@@ -703,6 +703,7 @@ export default function App(): JSX.Element {
               currentTimeSec={currentTimeSec}
               selectedId={selectedId}
               croppingId={croppingId}
+              isPlaying={isPlaying}
               videoRef={videoRef}
               onSelectSegment={(id) => dispatch({ type: 'SET_SELECTED', id })}
               onUpdateSegment={(id, patch) => dispatch({ type: 'MOVE_SEGMENT', id, patch })}

@@ -203,9 +203,15 @@ export default function Timeline({
         const dispTracks = getDisplayedTracks(projectRef.current)
         dragAboveRowsRef.current = rowIndex < 0
 
-        const newLiveId = (rowIndex >= 0 && rowIndex < dispTracks.length)
-          ? dispTracks[rowIndex].id
-          : drag.trackId!  // above/below: stay in original track visually
+        let newLiveId: string
+        if (rowIndex < 0) {
+          // Cursor is in the ruler area — show ghost "new overlay" row above everything
+          newLiveId = '__new_overlay__'
+        } else if (rowIndex < dispTracks.length) {
+          newLiveId = dispTracks[rowIndex].id
+        } else {
+          newLiveId = drag.trackId!  // below all rows
+        }
 
         if (newLiveId !== dragVisualTrackIdRef.current) {
           dragVisualTrackIdRef.current = newLiveId
@@ -248,14 +254,13 @@ export default function Timeline({
 
       if (drag?.kind === 'move' && drag.trackId && drag.segId) {
         const liveId = dragVisualTrackIdRef.current
-        const aboveRows = dragAboveRowsRef.current
 
-        if (liveId && liveId !== drag.trackId) {
+        if (liveId === '__new_overlay__') {
+          // Ghost row above all tracks → create new overlay track
+          onMoveSegmentToNewTrackRef.current(drag.trackId, drag.segId)
+        } else if (liveId && liveId !== drag.trackId) {
           // Dropped into a different existing track row
           onMoveSegmentBetweenTracksRef.current(drag.trackId, drag.segId, liveId)
-        } else if (aboveRows && drag.startY !== undefined && e.clientY - drag.startY < -TRACK_H / 2) {
-          // Dragged above all rows → create new overlay track
-          onMoveSegmentToNewTrackRef.current(drag.trackId, drag.segId)
         }
 
         // Pack base track if the drag involved it
@@ -392,15 +397,30 @@ export default function Timeline({
     const allSegs = project.tracks.flatMap((t) => t.segments)
     const dragSeg = allSegs.find((s) => s.id === dragSegId) ?? null
     if (dragSeg) {
-      displayedTracksForRender = displayedTracks.map((track) => {
-        if (track.id === dragOrigTrackId) {
-          return { ...track, segments: track.segments.filter((s) => s.id !== dragSegId) }
-        }
-        if (track.id === dragVisualTrackId) {
-          return { ...track, segments: [...track.segments, dragSeg] }
-        }
-        return track
-      }).filter((t) => t.type === 'video' || t.segments.length > 0)
+      if (dragVisualTrackId === '__new_overlay__') {
+        // Show ghost row at the top (above all existing overlay rows)
+        const withoutDrag = displayedTracks
+          .map((track) =>
+            track.id === dragOrigTrackId
+              ? { ...track, segments: track.segments.filter((s) => s.id !== dragSegId) }
+              : track
+          )
+          .filter((t) => t.type === 'video' || t.segments.length > 0)
+        displayedTracksForRender = [
+          { id: '__new_overlay__', type: 'video' as const, label: 'OVERLAY', segments: [dragSeg] },
+          ...withoutDrag
+        ]
+      } else {
+        displayedTracksForRender = displayedTracks.map((track) => {
+          if (track.id === dragOrigTrackId) {
+            return { ...track, segments: track.segments.filter((s) => s.id !== dragSegId) }
+          }
+          if (track.id === dragVisualTrackId) {
+            return { ...track, segments: [...track.segments, dragSeg] }
+          }
+          return track
+        }).filter((t) => t.type === 'video' || t.segments.length > 0)
+      }
     }
   }
 
