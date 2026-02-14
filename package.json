@@ -1,10 +1,11 @@
 {
-  "name": "iterate-editor",
+  "name": "statonic",
   "version": "1.0.0",
   "description": "Standalone video editor — own JSON format, WYSIWYG canvas + timeline",
   "main": "./out/main/index.js",
   "type": "module",
   "scripts": {
+    "postinstall": "node scripts/patch-electron-name.mjs",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",

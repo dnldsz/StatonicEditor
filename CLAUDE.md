@@ -111,9 +111,17 @@ Default canvas: `1080 × 1920` (9:16).
 - `drawtext` for each TextSegment with `x=(w/2)-(text_w/2)`, `borderw` for outline
 - Font: `/Users/danieldsouza/Downloads/tiktok-text-display-cufonfonts/TikTokTextMedium.otf`
 
+### App Name
+- App is named **Statonic** (was iterate-editor)
+- `package.json` name = `"statonic"`
+- `main/index.ts` calls `app.setName('Statonic')` and sets `Menu.setApplicationMenu(...)` with Statonic label
+- `scripts/patch-electron-name.mjs` — postinstall script patches Electron binary's `Info.plist` so dev mode also shows "Statonic" in menu bar/dock
+
 ### Known Gotchas
 - preload builds as `index.mjs` — `main/index.ts` references `../preload/index.mjs`
 - `webSecurity: false` in webPreferences (allows `file://` video src)
 - `sandbox: false` required for preload to use `require('electron')` / `webUtils`
 - `will-navigate` prevention added (belt-and-suspenders, but not strictly needed since `navigateOnDragDrop` defaults to false)
 - Font `@font-face` uses `file://` URL — build warns "didn't resolve at build time" but resolves fine at runtime in Electron
+- **Canvas blank screen bug (FIXED):** `renderVideoSeg` in `Canvas.tsx` uses `zIndex: z` (parameter name is `z`, NOT `zIndex`). Using shorthand `zIndex,` would be a `ReferenceError` → React unmounts entire tree. Always use `zIndex: z,` in that style object.
+- Vite/esbuild does NOT type-check — TypeScript errors don't prevent the app from running, but undefined variable references still throw `ReferenceError` at runtime

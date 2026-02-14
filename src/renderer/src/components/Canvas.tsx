@@ -344,7 +344,7 @@ export default function Canvas({
           position: 'absolute',
           left: outerLeft, top: outerTop,
           width: outerW, height: outerH,
-          zIndex,
+          zIndex: z,
           // overflow:visible so scale handles (which extend outside) are not clipped
           overflow: 'visible',
           outline: isSelected && !isCroppingThis ? '2px solid #0a7ef0' : 'none',

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, nativeImage } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, Menu } from 'electron'
 import { join } from 'path'
 import { readFileSync, writeFileSync } from 'fs'
 import { spawn } from 'child_process'
@@ -26,7 +26,6 @@ function createWindow(): void {
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
-    win.webContents.openDevTools({ mode: 'detach' })
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }
@@ -37,7 +36,44 @@ function createWindow(): void {
   })
 }
 
+app.setName('Statonic')
+app.setAboutPanelOptions({
+  applicationName: 'Statonic',
+  applicationVersion: '1.0.0',
+  iconPath: ICON_PATH
+})
+
 app.whenReady().then(() => {
+  // Set macOS application menu so menu bar shows "Statonic" instead of "Electron"
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    {
+      label: 'Statonic',
+      submenu: [
+        { role: 'about', label: 'About Statonic' },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide', label: 'Hide Statonic' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit', label: 'Quit Statonic' }
+      ]
+    },
+    { role: 'editMenu' },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
+    { role: 'windowMenu' }
+  ]))
+
   if (app.dock) {
     const icon = nativeImage.createFromPath(ICON_PATH)
     if (!icon.isEmpty()) {
