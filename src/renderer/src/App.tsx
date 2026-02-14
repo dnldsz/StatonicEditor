@@ -322,6 +322,8 @@ export default function App(): JSX.Element {
       const videoSrc = `file://${clip.src}`
       if (videoRef.current.src !== videoSrc) videoRef.current.src = videoSrc
       videoRef.current.currentTime = clip.sourceStartUs / 1e6 + (t - clip.startUs / 1e6)
+    } else if (videoRef.current) {
+      videoRef.current.pause()
     }
     dispatch({ type: 'SET_TIME', t })
   }, [project])
@@ -352,11 +354,16 @@ export default function App(): JSX.Element {
         if (videoRef.current.src !== videoSrc) {
           videoRef.current.src = videoSrc
           videoRef.current.play().catch(() => {})
+        } else if (videoRef.current.paused) {
+          videoRef.current.play().catch(() => {})
         }
         const expected = clip.sourceStartUs / 1e6 + (t - clip.startUs / 1e6)
         if (Math.abs(videoRef.current.currentTime - expected) > 0.2) {
           videoRef.current.currentTime = expected
         }
+      } else if (!clip && videoRef.current && !videoRef.current.paused) {
+        // In a gap — silence the video
+        videoRef.current.pause()
       }
       rafRef.current = requestAnimationFrame(tick)
     }

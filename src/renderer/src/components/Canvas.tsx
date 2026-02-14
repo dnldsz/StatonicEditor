@@ -14,6 +14,7 @@ interface CanvasProps {
 
 const SNAP_THRESHOLD = 0.04
 const HANDLE_SIZE = 10
+const CROP_HANDLE_SIZE = 10
 
 type HandleDir = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
 const HANDLES: HandleDir[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
@@ -41,15 +42,10 @@ const handleStyle = (dir: HandleDir): React.CSSProperties => {
 // ── drag state ─────────────────────────────────────────────────────────────
 
 type ScaleDragState = {
-  id: string
-  kind: 'text' | 'video'
-  dir: HandleDir
-  canvasLeft: number   // canvas rect.left at drag start (screen px)
-  canvasTop: number    // canvas rect.top at drag start (screen px)
-  centerX: number      // element center in canvas-space px
-  centerY: number
-  startDist: number    // initial cursor distance from element center (px)
-  origScale: number    // origTextScale or origClipScale
+  id: string; kind: 'text' | 'video'; dir: HandleDir
+  canvasLeft: number; canvasTop: number
+  centerX: number; centerY: number
+  startDist: number; origScale: number
 }
 
 type MoveDragState = {
@@ -57,9 +53,11 @@ type MoveDragState = {
   kind: 'text' | 'video'
 }
 
-type CropEdge = 'left' | 'right' | 'top' | 'bottom'
+// 8-direction crop handle: corners adjust two edges, edges adjust one
+type CropHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
+
 type CropDragState = {
-  id: string; edge: CropEdge
+  id: string; handle: CropHandle
   startX: number; startY: number
   origLeft: number; origRight: number; origTop: number; origBottom: number
   elWidth: number; elHeight: number
@@ -79,7 +77,6 @@ export default function Canvas({
   const { canvas } = project
   const aspect = canvas.width / canvas.height
 
-  // Track rendered size of the canvas wrapper
   useEffect(() => {
     const el = wrapperRef.current
     if (!el) return
@@ -93,15 +90,12 @@ export default function Canvas({
     return () => observer.disconnect()
   }, [])
 
-  // fontSize/strokeWidth are canonical (export-space pixels); scale for CSS
   const previewScale = previewSize.w > 0 ? previewSize.w / canvas.width : 1
   const previewH = previewSize.h > 0 ? previewSize.h : previewSize.w / aspect
 
   // ── find segments at current time ─────────────────────────────────────────
 
   let activeVideoSeg: VideoSegment | null = null
-  // Higher array index = higher z-layer (last track is on top).
-  // Video track is always background regardless of z.
   const visibleTexts: Array<{ seg: TextSegment; z: number }> = []
 
   for (let ti = 0; ti < project.tracks.length; ti++) {
@@ -116,12 +110,20 @@ export default function Canvas({
     }
   }
 
-  // Video display dimensions from clip transform
   const clipX = activeVideoSeg?.clipX ?? 0
   const clipY = activeVideoSeg?.clipY ?? 0
   const clipScale = activeVideoSeg?.clipScale ?? 1
   const srcW = activeVideoSeg?.sourceWidth ?? canvas.width
   const srcH = activeVideoSeg?.sourceHeight ?? canvas.height
+
+  // Crop values
+  const cl = activeVideoSeg?.cropLeft ?? 0
+  const cr = activeVideoSeg?.cropRight ?? 0
+  const ct = activeVideoSeg?.cropTop ?? 0
+  const cb = activeVideoSeg?.cropBottom ?? 0
+  const cropW = Math.max(0.01, 1 - cl - cr)
+  const cropH = Math.max(0.01, 1 - ct - cb)
+
   const vidDisplayH = clipScale * (previewH || previewSize.w / aspect)
   const vidDisplayW = (srcW / srcH) * vidDisplayH
   const vidLeft = ((clipX + 1) / 2) * previewSize.w
@@ -130,16 +132,16 @@ export default function Canvas({
   const isVideoSelected = activeVideoSeg !== null && activeVideoSeg.id === selectedId
   const isCropping = croppingId !== null && activeVideoSeg !== null && croppingId === activeVideoSeg.id
 
+  // When in crop mode: show full frame with overlay. Otherwise: apply crop transform.
+  const applyCropTransform = !isCropping
+
   const getRect = useCallback(() => wrapperRef.current?.getBoundingClientRect() ?? null, [])
 
-  // ── move drag (text & video) ────────────────────────────────────────────────
+  // ── move drag ──────────────────────────────────────────────────────────────
 
   const startMoveDrag = useCallback((
-    e: React.MouseEvent,
-    id: string,
-    kind: 'text' | 'video',
-    origX: number,
-    origY: number
+    e: React.MouseEvent, id: string, kind: 'text' | 'video',
+    origX: number, origY: number
   ) => {
     e.stopPropagation()
     onSelectSegment(id)
@@ -154,7 +156,6 @@ export default function Canvas({
       const dy = (me.clientY - drag.startY) / rect.height * 2
       let newX = drag.origX + dx
       let newY = drag.origY - dy
-
       if (drag.kind === 'text') {
         newX = Math.max(-1, Math.min(1, newX))
         newY = Math.max(-1, Math.min(1, newY))
@@ -168,122 +169,116 @@ export default function Canvas({
         onUpdateSegment(id, { clipX: newX, clipY: newY } as Partial<VideoSegment>)
       }
     }
-
     const onUp = () => {
       moveDragRef.current = null
       setSnapGuide({ x: false, y: false })
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
   }, [getRect, onSelectSegment, onUpdateSegment])
 
-  // ── scale drag (text & video) ───────────────────────────────────────────────
+  // ── scale drag ─────────────────────────────────────────────────────────────
 
   const startScaleDrag = useCallback((
-    e: React.MouseEvent,
-    seg: TextSegment | VideoSegment,
-    dir: HandleDir
+    e: React.MouseEvent, seg: TextSegment | VideoSegment, dir: HandleDir
   ) => {
     e.stopPropagation()
     e.preventDefault()
     const rect = wrapperRef.current!.getBoundingClientRect()
-
-    // Measure the element's bounding rect to find its center.
-    // The handle is a child of the element, so parentElement is the element itself.
     const elEl = (e.currentTarget as HTMLElement).parentElement!
     const elRect = elEl.getBoundingClientRect()
     const centerX = (elRect.left + elRect.right) / 2 - rect.left
     const centerY = (elRect.top + elRect.bottom) / 2 - rect.top
-
     const startOffX = e.clientX - rect.left - centerX
     const startOffY = e.clientY - rect.top - centerY
     const startDist = Math.sqrt(startOffX ** 2 + startOffY ** 2)
-
     const origScale = seg.type === 'text'
       ? (seg as TextSegment).textScale ?? 1
       : (seg as VideoSegment).clipScale ?? 1
 
     scaleDragRef.current = {
-      id: seg.id,
-      kind: seg.type === 'text' ? 'text' : 'video',
-      dir,
-      canvasLeft: rect.left,
-      canvasTop: rect.top,
-      centerX,
-      centerY,
-      startDist: Math.max(startDist, 1),  // guard against divide-by-zero
-      origScale
+      id: seg.id, kind: seg.type === 'text' ? 'text' : 'video', dir,
+      canvasLeft: rect.left, canvasTop: rect.top,
+      centerX, centerY, startDist: Math.max(startDist, 1), origScale
     }
-
     const onMove = (me: MouseEvent) => {
       const drag = scaleDragRef.current
       if (!drag) return
-      const curOffX = me.clientX - drag.canvasLeft - drag.centerX
-      const curOffY = me.clientY - drag.canvasTop - drag.centerY
-      const curDist = Math.sqrt(curOffX ** 2 + curOffY ** 2)
+      const curDist = Math.sqrt(
+        (me.clientX - drag.canvasLeft - drag.centerX) ** 2 +
+        (me.clientY - drag.canvasTop - drag.centerY) ** 2
+      )
       const ratio = curDist / drag.startDist
-
       if (drag.kind === 'text') {
         onUpdateSegment(drag.id, { textScale: Math.max(0.1, drag.origScale * ratio) } as Partial<TextSegment>)
       } else {
         onUpdateSegment(drag.id, { clipScale: Math.max(0.05, drag.origScale * ratio) } as Partial<VideoSegment>)
       }
     }
-
     const onUp = () => {
       scaleDragRef.current = null
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
   }, [onUpdateSegment])
 
   // ── crop drag ──────────────────────────────────────────────────────────────
 
-  const startCropDrag = (e: React.MouseEvent, edge: CropEdge) => {
+  const startCropDrag = (e: React.MouseEvent, handle: CropHandle) => {
     e.stopPropagation()
     e.preventDefault()
     if (!activeVideoSeg) return
-    const el = (e.currentTarget as HTMLElement).parentElement!
+    // The handle's parent is the outer video container div
+    const el = (e.currentTarget as HTMLElement).closest('[data-crop-container]') as HTMLElement
+      || (e.currentTarget as HTMLElement).parentElement!
     const rect = el.getBoundingClientRect()
     cropDragRef.current = {
-      id: activeVideoSeg.id, edge,
+      id: activeVideoSeg.id, handle,
       startX: e.clientX, startY: e.clientY,
-      origLeft: activeVideoSeg.cropLeft ?? 0,
-      origRight: activeVideoSeg.cropRight ?? 0,
-      origTop: activeVideoSeg.cropTop ?? 0,
-      origBottom: activeVideoSeg.cropBottom ?? 0,
-      elWidth: rect.width,
-      elHeight: rect.height
+      origLeft: cl, origRight: cr, origTop: ct, origBottom: cb,
+      elWidth: rect.width, elHeight: rect.height
     }
-
     const onMove = (me: MouseEvent) => {
       const drag = cropDragRef.current
       if (!drag) return
       const dx = (me.clientX - drag.startX) / drag.elWidth
       const dy = (me.clientY - drag.startY) / drag.elHeight
+      const clampL = (v: number) => Math.max(0, Math.min(1 - drag.origRight - 0.05, v))
+      const clampR = (v: number) => Math.max(0, Math.min(1 - drag.origLeft - 0.05, v))
+      const clampT = (v: number) => Math.max(0, Math.min(1 - drag.origBottom - 0.05, v))
+      const clampB = (v: number) => Math.max(0, Math.min(1 - drag.origTop - 0.05, v))
       const patch: Partial<VideoSegment> = {}
-      if (drag.edge === 'left')   patch.cropLeft   = Math.max(0, Math.min(0.95, drag.origLeft + dx))
-      if (drag.edge === 'right')  patch.cropRight  = Math.max(0, Math.min(0.95, drag.origRight - dx))
-      if (drag.edge === 'top')    patch.cropTop    = Math.max(0, Math.min(0.95, drag.origTop + dy))
-      if (drag.edge === 'bottom') patch.cropBottom = Math.max(0, Math.min(0.95, drag.origBottom - dy))
+      const h = drag.handle
+      if (h === 'nw' || h === 'w' || h === 'sw') patch.cropLeft   = clampL(drag.origLeft + dx)
+      if (h === 'ne' || h === 'e' || h === 'se') patch.cropRight  = clampR(drag.origRight - dx)
+      if (h === 'nw' || h === 'n' || h === 'ne') patch.cropTop    = clampT(drag.origTop + dy)
+      if (h === 'sw' || h === 's' || h === 'se') patch.cropBottom = clampB(drag.origBottom - dy)
       onUpdateSegment(drag.id, patch)
     }
-
     const onUp = () => {
       cropDragRef.current = null
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
   }
+
+  // Crop handle positions relative to the full video frame (used in crop mode)
+  const cropHandlePositions: Array<{ handle: CropHandle; left: string; top: string; cursor: string }> = [
+    { handle: 'nw', left: `${cl * 100}%`,            top: `${ct * 100}%`,            cursor: 'nw-resize' },
+    { handle: 'n',  left: `${(cl + cropW / 2) * 100}%`, top: `${ct * 100}%`,         cursor: 'n-resize' },
+    { handle: 'ne', left: `${(1 - cr) * 100}%`,      top: `${ct * 100}%`,            cursor: 'ne-resize' },
+    { handle: 'e',  left: `${(1 - cr) * 100}%`,      top: `${(ct + cropH / 2) * 100}%`, cursor: 'e-resize' },
+    { handle: 'se', left: `${(1 - cr) * 100}%`,      top: `${(1 - cb) * 100}%`,      cursor: 'se-resize' },
+    { handle: 's',  left: `${(cl + cropW / 2) * 100}%`, top: `${(1 - cb) * 100}%`,  cursor: 's-resize' },
+    { handle: 'sw', left: `${cl * 100}%`,            top: `${(1 - cb) * 100}%`,      cursor: 'sw-resize' },
+    { handle: 'w',  left: `${cl * 100}%`,            top: `${(ct + cropH / 2) * 100}%`, cursor: 'w-resize' },
+  ]
 
   // ── render ─────────────────────────────────────────────────────────────────
 
@@ -307,6 +302,7 @@ export default function Canvas({
     >
       {/* ── Video clip ─────────────────────────────────────────────────────── */}
       <div
+        data-crop-container="1"
         style={{
           position: 'absolute',
           width: vidDisplayW,
@@ -315,9 +311,11 @@ export default function Canvas({
           top: vidTop,
           transform: 'translate(-50%, -50%)',
           zIndex: 1,
+          overflow: 'hidden',
           outline: isVideoSelected && !isCropping ? '2px solid #0a7ef0' : 'none',
           cursor: activeVideoSeg ? (isCropping ? 'default' : 'move') : 'default',
-          boxSizing: 'border-box'
+          boxSizing: 'border-box',
+          visibility: activeVideoSeg ? 'visible' : 'hidden'
         }}
         onMouseDown={activeVideoSeg && !isCropping ? (e) =>
           startMoveDrag(e, activeVideoSeg!.id, 'video', clipX, clipY) : undefined}
@@ -327,69 +325,74 @@ export default function Canvas({
           if (activeVideoSeg) onSetCropping(isCropping ? null : activeVideoSeg.id)
         }}
       >
-        {/* Video element fills the wrapper exactly — no bars possible */}
-        <video
-          ref={videoRef}
-          style={{ width: '100%', height: '100%', display: 'block', objectFit: 'fill' }}
-          playsInline
-          preload="auto"
-        />
+        {/* Inner video wrapper — zoomed in to show crop result (when not in crop mode) */}
+        <div style={{
+          position: 'absolute',
+          left: applyCropTransform ? `${-(cl / cropW) * 100}%` : '0%',
+          top:  applyCropTransform ? `${-(ct / cropH) * 100}%` : '0%',
+          width:  applyCropTransform ? `${100 / cropW}%` : '100%',
+          height: applyCropTransform ? `${100 / cropH}%` : '100%',
+        }}>
+          <video
+            ref={videoRef}
+            style={{ width: '100%', height: '100%', display: 'block', objectFit: 'fill' }}
+            playsInline
+            preload="auto"
+          />
+        </div>
 
         {/* ── Crop mode overlay ─────────────────────────────────────────── */}
-        {isCropping && activeVideoSeg && (() => {
-          const cl = activeVideoSeg.cropLeft ?? 0
-          const cr = activeVideoSeg.cropRight ?? 0
-          const ct = activeVideoSeg.cropTop ?? 0
-          const cb = activeVideoSeg.cropBottom ?? 0
-          return (
-            <>
-              {/* Dark masks on cropped areas */}
-              <div style={{ position: 'absolute', top: 0, left: 0, width: `${cl * 100}%`, height: '100%', background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
-              <div style={{ position: 'absolute', top: 0, right: 0, width: `${cr * 100}%`, height: '100%', background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
-              <div style={{ position: 'absolute', top: 0, left: `${cl * 100}%`, right: `${cr * 100}%`, height: `${ct * 100}%`, background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
-              <div style={{ position: 'absolute', bottom: 0, left: `${cl * 100}%`, right: `${cr * 100}%`, height: `${cb * 100}%`, background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
+        {isCropping && activeVideoSeg && (
+          <>
+            {/* Dark masks outside the crop rectangle */}
+            <div style={{ position: 'absolute', top: 0, left: 0, width: `${cl * 100}%`, height: '100%', background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
+            <div style={{ position: 'absolute', top: 0, right: 0, width: `${cr * 100}%`, height: '100%', background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
+            <div style={{ position: 'absolute', top: 0, left: `${cl * 100}%`, right: `${cr * 100}%`, height: `${ct * 100}%`, background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
+            <div style={{ position: 'absolute', bottom: 0, left: `${cl * 100}%`, right: `${cr * 100}%`, height: `${cb * 100}%`, background: 'rgba(0,0,0,0.65)', pointerEvents: 'none', zIndex: 15 }} />
 
-              {/* Crop border outline */}
-              <div style={{
-                position: 'absolute',
-                left: `${cl * 100}%`, right: `${cr * 100}%`,
-                top: `${ct * 100}%`, bottom: `${cb * 100}%`,
-                border: '2px solid #fff',
-                pointerEvents: 'none', zIndex: 16
-              }} />
+            {/* Crop rectangle border */}
+            <div style={{
+              position: 'absolute',
+              left: `${cl * 100}%`, right: `${cr * 100}%`,
+              top: `${ct * 100}%`, bottom: `${cb * 100}%`,
+              border: '1px solid rgba(255,255,255,0.8)',
+              pointerEvents: 'none', zIndex: 16
+            }} />
 
-              {/* Draggable edge handles */}
+            {/* Traditional rectangular crop handles */}
+            {cropHandlePositions.map(({ handle, left, top, cursor }) => (
               <div
-                style={{ position: 'absolute', top: 0, left: `${cl * 100}%`, width: 6, height: '100%', cursor: 'ew-resize', zIndex: 20, transform: 'translateX(-50%)' }}
-                onMouseDown={(e) => startCropDrag(e, 'left')}
+                key={handle}
+                style={{
+                  position: 'absolute',
+                  left, top,
+                  width: CROP_HANDLE_SIZE, height: CROP_HANDLE_SIZE,
+                  transform: 'translate(-50%, -50%)',
+                  background: '#fff',
+                  border: '1.5px solid rgba(0,0,0,0.4)',
+                  borderRadius: 2,
+                  cursor,
+                  zIndex: 20,
+                  boxSizing: 'border-box',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.5)'
+                }}
+                onMouseDown={(e) => startCropDrag(e, handle)}
               />
-              <div
-                style={{ position: 'absolute', top: 0, right: `${cr * 100}%`, width: 6, height: '100%', cursor: 'ew-resize', zIndex: 20, transform: 'translateX(50%)' }}
-                onMouseDown={(e) => startCropDrag(e, 'right')}
-              />
-              <div
-                style={{ position: 'absolute', left: 0, right: 0, top: `${ct * 100}%`, height: 6, cursor: 'ns-resize', zIndex: 20, transform: 'translateY(-50%)' }}
-                onMouseDown={(e) => startCropDrag(e, 'top')}
-              />
-              <div
-                style={{ position: 'absolute', left: 0, right: 0, bottom: `${cb * 100}%`, height: 6, cursor: 'ns-resize', zIndex: 20, transform: 'translateY(50%)' }}
-                onMouseDown={(e) => startCropDrag(e, 'bottom')}
-              />
+            ))}
 
-              {/* Crop hint label */}
-              <div style={{
-                position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)',
-                background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: 11,
-                padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap',
-                pointerEvents: 'none', zIndex: 25
-              }}>
-                Double-click or press Esc to exit crop
-              </div>
-            </>
-          )
-        })()}
+            {/* Hint */}
+            <div style={{
+              position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)',
+              background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: 11,
+              padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap',
+              pointerEvents: 'none', zIndex: 25
+            }}>
+              Double-click or Esc to exit crop
+            </div>
+          </>
+        )}
 
-        {/* Handles on selected video (only when not cropping) */}
+        {/* Scale handles (selected, not cropping) */}
         {isVideoSelected && !isCropping && HANDLES.map((dir) => (
           <div
             key={dir}
@@ -401,25 +404,14 @@ export default function Canvas({
 
       {/* ── Snap guides ───────────────────────────────────────────────────── */}
       {snapGuide.x && (
-        <div style={{
-          position: 'absolute', left: '50%', top: 0, bottom: 0,
-          width: 1, background: '#ff3b30', opacity: 0.8,
-          transform: 'translateX(-50%)', pointerEvents: 'none', zIndex: 30
-        }} />
+        <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, background: '#ff3b30', opacity: 0.8, transform: 'translateX(-50%)', pointerEvents: 'none', zIndex: 30 }} />
       )}
       {snapGuide.y && (
-        <div style={{
-          position: 'absolute', top: '50%', left: 0, right: 0,
-          height: 1, background: '#ff3b30', opacity: 0.8,
-          transform: 'translateY(-50%)', pointerEvents: 'none', zIndex: 30
-        }} />
+        <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: 1, background: '#ff3b30', opacity: 0.8, transform: 'translateY(-50%)', pointerEvents: 'none', zIndex: 30 }} />
       )}
 
-      {/* Empty state */}
       {!activeVideoSeg && visibleTexts.length === 0 && (
-        <div className="canvas-overlay-placeholder">
-          Add a video clip to get started
-        </div>
+        <div className="canvas-overlay-placeholder">Add a video clip to get started</div>
       )}
 
       {/* ── Text overlays ─────────────────────────────────────────────────── */}
@@ -431,22 +423,15 @@ export default function Canvas({
           seg.textAlign === 'left' ? 'translate(0, -50%)' :
           seg.textAlign === 'right' ? 'translate(-100%, -50%)' :
           'translate(-50%, -50%)'
-
         return (
           <div
             key={seg.id}
-            style={{
-              position: 'absolute',
-              left: `${leftPct}%`, top: `${topPct}%`,
-              transform: alignTransform,
-              zIndex: isSelected ? 100 : z
-            }}
+            style={{ position: 'absolute', left: `${leftPct}%`, top: `${topPct}%`, transform: alignTransform, zIndex: isSelected ? 100 : z }}
           >
             <div
               className={`text-overlay${isSelected ? ' selected' : ''}`}
               style={{
-                position: 'relative',
-                display: 'inline-block',
+                position: 'relative', display: 'inline-block',
                 fontSize: seg.fontSize * (seg.textScale ?? 1) * previewScale,
                 color: seg.color,
                 fontWeight: seg.bold ? 700 : 400,
@@ -455,23 +440,15 @@ export default function Canvas({
                 WebkitTextStroke: (seg.strokeEnabled ?? false)
                   ? `${seg.fontSize * (seg.textScale ?? 1) * (6.9 / 97.0) * 2 * previewScale}px ${seg.strokeColor}`
                   : undefined,
-                cursor: 'move',
-                userSelect: 'none',
-                whiteSpace: 'pre',
-                textAlign: seg.textAlign ?? 'center',
-                lineHeight: 1.0,
-                padding: '2px 4px'
+                cursor: 'move', userSelect: 'none', whiteSpace: 'pre',
+                textAlign: seg.textAlign ?? 'center', lineHeight: 1.0, padding: '2px 4px'
               }}
               onMouseDown={(e) => startMoveDrag(e, seg.id, 'text', seg.x, seg.y)}
               onClick={(e) => { e.stopPropagation(); onSelectSegment(seg.id) }}
             >
               {seg.text}
               {isSelected && HANDLES.map((dir) => (
-                <div
-                  key={dir}
-                  style={handleStyle(dir)}
-                  onMouseDown={(e) => startScaleDrag(e, seg, dir)}
-                />
+                <div key={dir} style={handleStyle(dir)} onMouseDown={(e) => startScaleDrag(e, seg, dir)} />
               ))}
             </div>
           </div>
