@@ -89,15 +89,19 @@ export default function Canvas({
   // ── find segments at current time ─────────────────────────────────────────
 
   let activeVideoSeg: VideoSegment | null = null
-  const visibleTexts: TextSegment[] = []
+  // z-index: tracks higher in the list (lower array index) render on top.
+  // Video track is always background regardless.
+  const visibleTexts: Array<{ seg: TextSegment; z: number }> = []
 
-  for (const track of project.tracks) {
+  for (let ti = 0; ti < project.tracks.length; ti++) {
+    const track = project.tracks[ti]
+    const z = project.tracks.length - ti  // higher index in list → lower z
     for (const seg of track.segments) {
       const start = seg.startUs / 1e6
       const end = (seg.startUs + seg.durationUs) / 1e6
       if (currentTimeSec < start || currentTimeSec >= end) continue
       if (seg.type === 'video') activeVideoSeg = seg as VideoSegment
-      else if (seg.type === 'text') visibleTexts.push(seg as TextSegment)
+      else if (seg.type === 'text') visibleTexts.push({ seg: seg as TextSegment, z })
     }
   }
 
@@ -302,7 +306,7 @@ export default function Canvas({
       )}
 
       {/* ── Text overlays ─────────────────────────────────────────────────── */}
-      {visibleTexts.map((seg) => {
+      {visibleTexts.map(({ seg, z }) => {
         const leftPct = ((seg.x + 1) / 2) * 100
         const topPct = ((1 - seg.y) / 2) * 100
         const isSelected = selectedId === seg.id
@@ -318,7 +322,7 @@ export default function Canvas({
               position: 'absolute',
               left: `${leftPct}%`, top: `${topPct}%`,
               transform: alignTransform,
-              zIndex: isSelected ? 20 : 10
+              zIndex: isSelected ? 100 : z
             }}
           >
             <div

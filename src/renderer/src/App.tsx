@@ -11,6 +11,12 @@ function uid(): string {
   return Math.random().toString(36).slice(2, 10)
 }
 
+function formatTimestamp(sec: number): string {
+  const m = Math.floor(sec / 60)
+  const s = sec % 60
+  return `${m}:${s.toFixed(1).padStart(4, '0')}`
+}
+
 function getActiveVideoSegment(project: Project, timeSec: number): VideoSegment | null {
   for (const track of project.tracks) {
     if (track.type !== 'video') continue
@@ -43,75 +49,161 @@ const defaultProject: Project = {
 
 const initialState: AppState = {
   project: defaultProject,
+  past: [],
+  future: [],
+  clipboard: null,
   currentTimeSec: 0,
   selectedId: null,
   zoom: 100,
   isPlaying: false
 }
 
-// ── reducer ───────────────────────────────────────────────────────────────────
+// ── inner project reducer (pure, no history) ──────────────────────────────────
 
-function reducer(state: AppState, action: Action): AppState {
+function applyProjectAction(project: Project, action: Action): Project {
   switch (action.type) {
-    case 'SET_TIME':
-      return { ...state, currentTimeSec: Math.max(0, action.t) }
-
-    case 'SET_PLAYING':
-      return { ...state, isPlaying: action.playing }
-
-    case 'SET_SELECTED':
-      return { ...state, selectedId: action.id }
-
-    case 'SET_ZOOM':
-      return { ...state, zoom: Math.min(500, Math.max(20, action.zoom)) }
-
-    case 'SET_PROJECT':
-      return { ...state, project: action.project, currentTimeSec: 0, selectedId: null }
-
     case 'ADD_VIDEO_SEGMENT': {
-      const tracks = state.project.tracks.map((t) => {
-        if (t.type !== 'video') return t
-        return { ...t, segments: [...t.segments, action.segment] }
-      })
-      return { ...state, project: { ...state.project, tracks } }
+      const tracks = project.tracks.map((t) =>
+        t.type !== 'video' ? t : { ...t, segments: [...t.segments, action.segment] }
+      )
+      return { ...project, tracks }
     }
 
-    case 'ADD_TEXT_TRACK': {
-      return {
-        ...state,
-        project: { ...state.project, tracks: [...state.project.tracks, action.track] }
-      }
+    case 'ADD_TEXT_WITH_TRACK': {
+      const newTrack = { ...action.track, segments: [action.segment] }
+      return { ...project, tracks: [...project.tracks, newTrack] }
     }
 
-    case 'ADD_TEXT_SEGMENT': {
-      const tracks = state.project.tracks.map((t) => {
-        if (t.id !== action.trackId) return t
-        return { ...t, segments: [...t.segments, action.segment] }
-      })
-      return { ...state, project: { ...state.project, tracks } }
+    case 'ADD_SEGMENT_TO_TRACK': {
+      const tracks = project.tracks.map((t) =>
+        t.id !== action.trackId ? t : { ...t, segments: [...t.segments, action.segment] }
+      )
+      return { ...project, tracks }
     }
 
     case 'UPDATE_SEGMENT': {
-      const tracks = state.project.tracks.map((t) => ({
+      const tracks = project.tracks.map((t) => ({
         ...t,
         segments: t.segments.map((s) =>
           s.id === action.id ? ({ ...s, ...action.patch } as Segment) : s
         )
       }))
-      return { ...state, project: { ...state.project, tracks } }
+      return { ...project, tracks }
     }
 
     case 'DELETE_SEGMENT': {
-      const tracks = state.project.tracks.map((t) => ({
+      const tracks = project.tracks.map((t) => ({
         ...t,
         segments: t.segments.filter((s) => s.id !== action.id)
       }))
-      return { ...state, project: { ...state.project, tracks } }
+      return { ...project, tracks }
+    }
+
+    case 'SLICE_AT': {
+      const { timeUs } = action
+      const tracks = project.tracks.map((track) => {
+        const segs: Segment[] = []
+        for (const seg of track.segments) {
+          if (timeUs <= seg.startUs || timeUs >= seg.startUs + seg.durationUs) {
+            segs.push(seg)
+            continue
+          }
+          const firstDur = timeUs - seg.startUs
+          const secondDur = seg.durationUs - firstDur
+          if (seg.type === 'video') {
+            const vs = seg as VideoSegment
+            const srcOffset = Math.round((firstDur / vs.durationUs) * vs.sourceDurationUs)
+            segs.push(
+              { ...vs, durationUs: firstDur, sourceDurationUs: srcOffset },
+              {
+                ...vs, id: uid(), startUs: timeUs, durationUs: secondDur,
+                sourceStartUs: vs.sourceStartUs + srcOffset,
+                sourceDurationUs: vs.sourceDurationUs - srcOffset
+              }
+            )
+          } else {
+            segs.push(
+              { ...seg, durationUs: firstDur },
+              { ...seg, id: uid(), startUs: timeUs, durationUs: secondDur }
+            )
+          }
+        }
+        return { ...track, segments: segs }
+      })
+      return { ...project, tracks }
     }
 
     default:
-      return state
+      return project
   }
+}
+
+// ── outer reducer (history + non-project actions) ─────────────────────────────
+
+const UNDOABLE = new Set<Action['type']>([
+  'ADD_VIDEO_SEGMENT', 'ADD_TEXT_WITH_TRACK', 'ADD_SEGMENT_TO_TRACK',
+  'UPDATE_SEGMENT', 'DELETE_SEGMENT', 'SLICE_AT'
+])
+
+function reducer(state: AppState, action: Action): AppState {
+  // undo / redo
+  if (action.type === 'UNDO') {
+    if (!state.past.length) return state
+    return {
+      ...state,
+      project: state.past[state.past.length - 1],
+      past: state.past.slice(0, -1),
+      future: [state.project, ...state.future].slice(0, 100),
+      selectedId: null
+    }
+  }
+  if (action.type === 'REDO') {
+    if (!state.future.length) return state
+    return {
+      ...state,
+      project: state.future[0],
+      past: [...state.past, state.project].slice(-100),
+      future: state.future.slice(1),
+      selectedId: null
+    }
+  }
+
+  // project load — clears history
+  if (action.type === 'SET_PROJECT') {
+    return { ...state, project: action.project, past: [], future: [], currentTimeSec: 0, selectedId: null }
+  }
+
+  // drag update — no history
+  if (action.type === 'MOVE_SEGMENT') {
+    const tracks = state.project.tracks.map((t) => ({
+      ...t,
+      segments: t.segments.map((s) =>
+        s.id === action.id ? ({ ...s, ...action.patch } as Segment) : s
+      )
+    }))
+    return { ...state, project: { ...state.project, tracks } }
+  }
+
+  // non-project state
+  switch (action.type) {
+    case 'SET_TIME':      return { ...state, currentTimeSec: Math.max(0, action.t) }
+    case 'SET_PLAYING':   return { ...state, isPlaying: action.playing }
+    case 'SET_SELECTED':  return { ...state, selectedId: action.id }
+    case 'SET_ZOOM':      return { ...state, zoom: Math.min(500, Math.max(20, action.zoom)) }
+    case 'SET_CLIPBOARD': return { ...state, clipboard: action.segment }
+  }
+
+  // undoable project mutations
+  if (UNDOABLE.has(action.type)) {
+    return {
+      ...state,
+      project: applyProjectAction(state.project, action),
+      past: [...state.past.slice(-99), state.project],
+      future: []
+    }
+  }
+
+  return state
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -131,8 +223,6 @@ declare global {
   }
 }
 
-// Render a text segment to a transparent PNG at full canvas resolution.
-// Uses the browser's text engine so emoji and font fallback work correctly.
 async function renderTextToPng(seg: TextSegment, cw: number, ch: number): Promise<string> {
   await document.fonts.ready
   const canvas = document.createElement('canvas')
@@ -175,7 +265,11 @@ export default function App(): JSX.Element {
   const rafRef = useRef<number | null>(null)
   const playStartRef = useRef<{ wallTime: number; timelineSec: number } | null>(null)
 
-  const { project, currentTimeSec, selectedId, zoom, isPlaying } = state
+  // Stable ref so keyboard handler always reads fresh state without re-registering
+  const stateRef = useRef(state)
+  stateRef.current = state
+
+  const { project, currentTimeSec, selectedId, zoom, isPlaying, past, future } = state
 
   // ── seek logic ──────────────────────────────────────────────────────────────
 
@@ -183,9 +277,7 @@ export default function App(): JSX.Element {
     const clip = getActiveVideoSegment(project, t)
     if (clip && videoRef.current) {
       const videoSrc = `file://${clip.src}`
-      if (videoRef.current.src !== videoSrc) {
-        videoRef.current.src = videoSrc
-      }
+      if (videoRef.current.src !== videoSrc) videoRef.current.src = videoSrc
       videoRef.current.currentTime = clip.sourceStartUs / 1e6 + (t - clip.startUs / 1e6)
     }
     dispatch({ type: 'SET_TIME', t })
@@ -194,10 +286,7 @@ export default function App(): JSX.Element {
   // ── play/pause ──────────────────────────────────────────────────────────────
 
   const stopRaf = useCallback(() => {
-    if (rafRef.current !== null) {
-      cancelAnimationFrame(rafRef.current)
-      rafRef.current = null
-    }
+    if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
   }, [])
 
   const startRaf = useCallback(() => {
@@ -214,7 +303,6 @@ export default function App(): JSX.Element {
         return
       }
       dispatch({ type: 'SET_TIME', t })
-      // sync video
       const clip = getActiveVideoSegment(project, t)
       if (clip && videoRef.current) {
         const videoSrc = `file://${clip.src}`
@@ -251,31 +339,82 @@ export default function App(): JSX.Element {
     }
   }, [isPlaying, currentTimeSec, project, startRaf, stopRaf])
 
-  // Update playStartRef when time changes externally during playback
-  useEffect(() => {
-    if (!isPlaying) return
-    // This is called when seekTo is triggered while playing; restart RAF reference
-  }, [isPlaying])
-
-  // Stop RAF on unmount
   useEffect(() => () => stopRaf(), [stopRaf])
 
   // ── keyboard shortcuts ──────────────────────────────────────────────────────
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-      if (e.code === 'Space') {
+      const inInput = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement
+      const { project, currentTimeSec, selectedId, clipboard } = stateRef.current
+
+      // Space — play/pause (not in inputs)
+      if (e.code === 'Space' && !inInput) {
         e.preventDefault()
         togglePlay()
+        return
       }
+
+      // Undo / Redo
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+        e.preventDefault()
+        dispatch({ type: e.shiftKey ? 'REDO' : 'UNDO' })
+        return
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'y') {
+        e.preventDefault()
+        dispatch({ type: 'REDO' })
+        return
+      }
+
+      if (inInput) return  // below here: no inputs
+
+      // Delete selected
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedId) dispatch({ type: 'DELETE_SEGMENT', id: selectedId })
+        return
       }
+
+      // Cmd+B — slice at playhead
+      if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
+        e.preventDefault()
+        dispatch({ type: 'SLICE_AT', timeUs: Math.round(currentTimeSec * 1e6) })
+        return
+      }
+
+      // Cmd+C — copy selected
+      if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
+        e.preventDefault()
+        if (selectedId) {
+          const seg = project.tracks.flatMap((t) => t.segments).find((s) => s.id === selectedId)
+          if (seg) dispatch({ type: 'SET_CLIPBOARD', segment: seg })
+        }
+        return
+      }
+
+      // Cmd+V — paste clipboard at playhead
+      if ((e.metaKey || e.ctrlKey) && e.key === 'v' && clipboard) {
+        e.preventDefault()
+        const newId = uid()
+        const newSeg = { ...clipboard, id: newId, startUs: Math.round(currentTimeSec * 1e6) }
+        if (newSeg.type === 'video') {
+          dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: newSeg as VideoSegment })
+        } else {
+          const count = project.tracks.filter((t) => t.type === 'text').length
+          const newTrack: Track = { id: uid(), type: 'text', label: `TEXT ${count + 1}`, segments: [] }
+          dispatch({ type: 'ADD_TEXT_WITH_TRACK', track: newTrack, segment: newSeg as TextSegment })
+        }
+        dispatch({ type: 'SET_SELECTED', id: newId })
+        return
+      }
+
+      // Arrow keys — frame step
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); seekTo(Math.max(0, currentTimeSec - 1 / 30)); return }
+      if (e.key === 'ArrowRight') { e.preventDefault(); seekTo(currentTimeSec + 1 / 30); return }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [togglePlay, selectedId])
+  }, [togglePlay, seekTo])  // stable — stateRef keeps values current
 
   // ── toolbar actions ─────────────────────────────────────────────────────────
 
@@ -299,7 +438,6 @@ export default function App(): JSX.Element {
     const info = await window.api.openVideo()
     if (!info) return
     const durationUs = Math.round(info.durationSec * 1e6)
-    // Find end of last video segment on timeline
     let startUs = 0
     for (const track of project.tracks) {
       if (track.type !== 'video') continue
@@ -309,23 +447,14 @@ export default function App(): JSX.Element {
       }
     }
     const seg: VideoSegment = {
-      id: uid(),
-      type: 'video',
-      src: info.path,
-      name: info.name,
-      startUs,
-      durationUs,
-      sourceStartUs: 0,
-      sourceDurationUs: durationUs,
-      sourceWidth: info.width,
-      sourceHeight: info.height,
+      id: uid(), type: 'video', src: info.path, name: info.name,
+      startUs, durationUs, sourceStartUs: 0, sourceDurationUs: durationUs,
+      sourceWidth: info.width, sourceHeight: info.height,
       clipX: 0, clipY: 0, clipScale: 1
     }
     dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: seg })
     dispatch({ type: 'SET_SELECTED', id: seg.id })
     dispatch({ type: 'SET_TIME', t: startUs / 1e6 })
-    // Directly update videoRef — seekTo can't be used here because the new
-    // segment isn't in project state yet (dispatch is async)
     if (videoRef.current) {
       videoRef.current.src = `file://${info.path}`
       videoRef.current.currentTime = 0
@@ -333,44 +462,24 @@ export default function App(): JSX.Element {
   }, [project])
 
   const handleAddText = useCallback(() => {
-    // Find an existing text track or create one
-    let textTrack = project.tracks.find((t) => t.type === 'text')
-    let trackId: string
-    if (!textTrack) {
-      trackId = uid()
-      const newTrack: Track = { id: trackId, type: 'text', label: 'TEXT', segments: [] }
-      dispatch({ type: 'ADD_TEXT_TRACK', track: newTrack })
-    } else {
-      trackId = textTrack.id
-    }
-
-    // Place at current time for 3 seconds
-    const startUs = Math.round(currentTimeSec * 1e6)
+    const count = project.tracks.filter((t) => t.type === 'text').length
+    const trackId = uid()
+    const newTrack: Track = { id: trackId, type: 'text', label: `TEXT ${count + 1}`, segments: [] }
     const seg: TextSegment = {
-      id: uid(),
-      type: 'text',
-      text: 'New Text',
-      startUs,
-      durationUs: 3_000_000,
-      x: 0,
-      y: 0,
-      fontSize: 120,
-      color: '#ffffff',
-      bold: false,
-      italic: false,
-      strokeEnabled: true,
-      strokeColor: '#000000',
-      textAlign: 'center',
-      textScale: 1
+      id: uid(), type: 'text', text: 'New Text',
+      startUs: Math.round(currentTimeSec * 1e6), durationUs: 3_000_000,
+      x: 0, y: 0, fontSize: 120, color: '#ffffff',
+      bold: false, italic: false,
+      strokeEnabled: true, strokeColor: '#000000',
+      textAlign: 'center', textScale: 1
     }
-    dispatch({ type: 'ADD_TEXT_SEGMENT', segment: seg, trackId })
+    dispatch({ type: 'ADD_TEXT_WITH_TRACK', track: newTrack, segment: seg })
     dispatch({ type: 'SET_SELECTED', id: seg.id })
   }, [project, currentTimeSec])
 
   const handleExport = useCallback(async () => {
     let cleanup: (() => void) | null = null
     try {
-      // Render text segments to PNGs in the browser first (preserves emoji + WYSIWYG)
       const textOverlays: Array<{ path: string; startSec: number; endSec: number }> = []
       for (const track of project.tracks) {
         if (track.type !== 'text') continue
@@ -381,9 +490,7 @@ export default function App(): JSX.Element {
           textOverlays.push({ path, startSec: ts.startUs / 1e6, endSec: (ts.startUs + ts.durationUs) / 1e6 })
         }
       }
-      cleanup = window.api.onExportProgress((line) => {
-        console.log('[ffmpeg]', line)
-      })
+      cleanup = window.api.onExportProgress((line) => { console.log('[ffmpeg]', line) })
       const result = await window.api.exportVideo(project, textOverlays)
       if (result.error) alert(`Export failed: ${result.error}`)
     } catch (err: any) {
@@ -393,7 +500,7 @@ export default function App(): JSX.Element {
     }
   }, [project])
 
-  // ── drop video onto timeline ────────────────────────────────────────────────
+  // ── drop video ──────────────────────────────────────────────────────────────
 
   const handleDropVideo = useCallback(async (filePath: string) => {
     const info = await window.api.getVideoInfo(filePath)
@@ -408,16 +515,9 @@ export default function App(): JSX.Element {
       }
     }
     const seg: VideoSegment = {
-      id: uid(),
-      type: 'video',
-      src: info.path,
-      name: info.name,
-      startUs,
-      durationUs,
-      sourceStartUs: 0,
-      sourceDurationUs: durationUs,
-      sourceWidth: info.width,
-      sourceHeight: info.height,
+      id: uid(), type: 'video', src: info.path, name: info.name,
+      startUs, durationUs, sourceStartUs: 0, sourceDurationUs: durationUs,
+      sourceWidth: info.width, sourceHeight: info.height,
       clipX: 0, clipY: 0, clipScale: 1
     }
     dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: seg })
@@ -429,8 +529,6 @@ export default function App(): JSX.Element {
     }
   }, [project])
 
-  // Also listen for the custom event dispatched by the window-level drop handler
-  // (second path for drag-drop in case element-level handler doesn't fire)
   const handleDropVideoRef = useRef(handleDropVideo)
   handleDropVideoRef.current = handleDropVideo
   useEffect(() => {
@@ -439,15 +537,18 @@ export default function App(): JSX.Element {
     return () => window.removeEventListener('video-file-dropped', handler)
   }, [])
 
+  // ── duplicate segment (from timeline alt+drag) ──────────────────────────────
+
+  const handleDuplicateSegment = useCallback((trackId: string, seg: Segment) => {
+    dispatch({ type: 'ADD_SEGMENT_TO_TRACK', trackId, segment: seg })
+    dispatch({ type: 'SET_SELECTED', id: seg.id })
+  }, [])
+
   // ── selected segment ────────────────────────────────────────────────────────
 
   const selectedSegment = selectedId
     ? project.tracks.flatMap((t) => t.segments).find((s) => s.id === selectedId) ?? null
     : null
-
-  const handleUpdateSegment = useCallback((id: string, patch: Partial<Segment>) => {
-    dispatch({ type: 'UPDATE_SEGMENT', id, patch })
-  }, [])
 
   // ── render ──────────────────────────────────────────────────────────────────
 
@@ -459,35 +560,57 @@ export default function App(): JSX.Element {
         onSave={handleSaveProject}
         onAddVideo={handleAddVideo}
         onAddText={handleAddText}
-        isPlaying={isPlaying}
-        onTogglePlay={togglePlay}
-        onStepBack={() => seekTo(Math.max(0, currentTimeSec - 1 / 30))}
-        onStepForward={() => seekTo(currentTimeSec + 1 / 30)}
         zoom={zoom}
         onZoomChange={(z) => dispatch({ type: 'SET_ZOOM', zoom: z })}
         onExport={handleExport}
         projectName={project.name}
-        onRenameProject={(name) =>
-          dispatch({ type: 'SET_PROJECT', project: { ...project, name } })
-        }
+        onRenameProject={(name) => dispatch({ type: 'SET_PROJECT', project: { ...project, name } })}
+        canUndo={past.length > 0}
+        canRedo={future.length > 0}
+        onUndo={() => dispatch({ type: 'UNDO' })}
+        onRedo={() => dispatch({ type: 'REDO' })}
       />
 
       <div className="app-body">
         <div className="canvas-area">
-          <Canvas
-            project={project}
-            currentTimeSec={currentTimeSec}
-            selectedId={selectedId}
-            videoRef={videoRef}
-            onSelectSegment={(id) => dispatch({ type: 'SET_SELECTED', id })}
-            onUpdateSegment={handleUpdateSegment}
-          />
+          <div className="canvas-center">
+            <Canvas
+              project={project}
+              currentTimeSec={currentTimeSec}
+              selectedId={selectedId}
+              videoRef={videoRef}
+              onSelectSegment={(id) => dispatch({ type: 'SET_SELECTED', id })}
+              onUpdateSegment={(id, patch) => dispatch({ type: 'MOVE_SEGMENT', id, patch })}
+            />
+          </div>
+
+          {/* Playback controls */}
+          <div className="playback-bar">
+            <span className="playback-time">{formatTimestamp(currentTimeSec)}</span>
+            <div className="toolbar-group">
+              <button
+                className="btn btn-icon"
+                onClick={() => seekTo(Math.max(0, currentTimeSec - 1 / 30))}
+                title="Step back (←)"
+              >⏮</button>
+              <button
+                className="btn btn-play"
+                onClick={togglePlay}
+                title="Play / Pause (Space)"
+              >{isPlaying ? '⏸' : '▶'}</button>
+              <button
+                className="btn btn-icon"
+                onClick={() => seekTo(currentTimeSec + 1 / 30)}
+                title="Step forward (→)"
+              >⏭</button>
+            </div>
+          </div>
         </div>
 
         <div className="properties-area">
           <PropertiesPanel
             segment={selectedSegment}
-            onUpdate={handleUpdateSegment}
+            onUpdate={(id, patch) => dispatch({ type: 'UPDATE_SEGMENT', id, patch })}
             onDelete={(id) => {
               dispatch({ type: 'DELETE_SEGMENT', id })
               dispatch({ type: 'SET_SELECTED', id: null })
@@ -503,13 +626,12 @@ export default function App(): JSX.Element {
           selectedId={selectedId}
           zoom={zoom}
           onSeek={(t) => {
-            if (isPlaying) {
-              playStartRef.current = { wallTime: performance.now(), timelineSec: t }
-            }
+            if (isPlaying) playStartRef.current = { wallTime: performance.now(), timelineSec: t }
             seekTo(t)
           }}
           onSelectSegment={(id) => dispatch({ type: 'SET_SELECTED', id })}
-          onUpdateSegment={(id, patch) => dispatch({ type: 'UPDATE_SEGMENT', id, patch: patch as any })}
+          onUpdateSegment={(id, patch) => dispatch({ type: 'MOVE_SEGMENT', id, patch: patch as any })}
+          onDuplicateSegment={handleDuplicateSegment}
           onDropVideo={handleDropVideo}
         />
       </div>

@@ -4,7 +4,11 @@ import { Project, Segment } from '../types'
 const LABEL_W = 88
 const TRACK_H = 44
 const RULER_H = 28
-const SNAP_PX = 8               // snap within 8 screen pixels
+const SNAP_PX = 8
+
+function uid(): string {
+  return Math.random().toString(36).slice(2, 10)
+}
 
 // ── Snap utilities ─────────────────────────────────────────────────────────
 function collectSnapPoints(project: Project, excludeId?: string): number[] {
@@ -19,11 +23,7 @@ function collectSnapPoints(project: Project, excludeId?: string): number[] {
   return pts
 }
 
-function applySnap(
-  valueUs: number,
-  snapPts: number[],
-  zoom: number
-): { value: number; snapAt: number | null } {
+function applySnap(valueUs: number, snapPts: number[], zoom: number): { value: number; snapAt: number | null } {
   const thresholdUs = (SNAP_PX / zoom) * 1e6
   let best: number | null = null
   let bestDelta = thresholdUs
@@ -38,6 +38,7 @@ function applySnap(
 interface DragState {
   kind: 'seek' | 'move' | 'resize-left' | 'resize-right'
   segId?: string
+  trackId?: string
   startX: number
   startUs?: number
   durationUs?: number
@@ -52,6 +53,7 @@ interface TimelineProps {
   onSeek: (t: number) => void
   onSelectSegment: (id: string | null) => void
   onUpdateSegment: (id: string, patch: Partial<Segment>) => void
+  onDuplicateSegment: (trackId: string, segment: Segment) => void
   onDropVideo: (filePath: string) => void
 }
 
@@ -64,14 +66,14 @@ function formatTime(sec: number): string {
 function getRulerInterval(zoom: number): { major: number; minor: number } {
   if (zoom >= 200) return { major: 0.5, minor: 0.1 }
   if (zoom >= 100) return { major: 1, minor: 0.25 }
-  if (zoom >= 50) return { major: 2, minor: 0.5 }
+  if (zoom >= 50)  return { major: 2, minor: 0.5 }
   return { major: 5, minor: 1 }
 }
 
 // ── Timeline ───────────────────────────────────────────────────────────────
 export default function Timeline({
   project, currentTimeSec, selectedId, zoom,
-  onSeek, onSelectSegment, onUpdateSegment, onDropVideo
+  onSeek, onSelectSegment, onUpdateSegment, onDuplicateSegment, onDropVideo
 }: TimelineProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState | null>(null)
@@ -96,7 +98,7 @@ export default function Timeline({
     el.style.display = 'block'
   }
 
-  // ── Global mouse event handlers (stable, registered once) ─────────────────
+  // ── Global mouse handlers (stable, registered once) ────────────────────────
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       const drag = dragRef.current
@@ -124,7 +126,6 @@ export default function Timeline({
       if (drag.kind === 'move') {
         const naturalUs = Math.max(0, drag.startUs! + dtUs)
         const naturalEndUs = naturalUs + drag.durationUs!
-        // Try snapping both leading and trailing edges
         const { value: snappedStart, snapAt: snapA } = applySnap(naturalUs, snapPts, zoom)
         const { value: snappedEnd, snapAt: snapB } = applySnap(naturalEndUs, snapPts, zoom)
         let finalStart: number, snapAt: number | null
@@ -167,7 +168,7 @@ export default function Timeline({
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [])  // stable — refs keep values current
+  }, [])
 
   // ── File drag & drop ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -207,11 +208,32 @@ export default function Timeline({
     e.preventDefault()
   }
 
-  const handleSegmentMouseDown = (e: React.MouseEvent, seg: Segment, kind: 'move' | 'resize-left' | 'resize-right') => {
+  // ── Segment mousedown — move / resize / Option+duplicate ──────────────────
+  const handleSegmentMouseDown = (
+    e: React.MouseEvent,
+    seg: Segment,
+    trackId: string,
+    kind: 'move' | 'resize-left' | 'resize-right'
+  ) => {
     e.stopPropagation()
-    onSelectSegment(seg.id)
-    dragRef.current = { kind, segId: seg.id, startX: e.clientX, startUs: seg.startUs, durationUs: seg.durationUs }
     e.preventDefault()
+
+    // Option (alt) + move → duplicate first, then drag the copy
+    if (kind === 'move' && e.altKey) {
+      const newSeg = { ...seg, id: uid() }
+      onDuplicateSegment(trackId, newSeg)
+      dragRef.current = {
+        kind: 'move', segId: newSeg.id, trackId,
+        startX: e.clientX, startUs: seg.startUs, durationUs: seg.durationUs
+      }
+      return
+    }
+
+    onSelectSegment(seg.id)
+    dragRef.current = {
+      kind, segId: seg.id, trackId,
+      startX: e.clientX, startUs: seg.startUs, durationUs: seg.durationUs
+    }
   }
 
   // ── Computed values ────────────────────────────────────────────────────────
@@ -269,11 +291,17 @@ export default function Timeline({
                     className={`segment type-${seg.type}${isSelected ? ' selected' : ''}`}
                     style={{ left, width }}
                     onClick={(e) => { e.stopPropagation(); onSelectSegment(seg.id) }}
-                    onMouseDown={(e) => handleSegmentMouseDown(e, seg, 'move')}
+                    onMouseDown={(e) => handleSegmentMouseDown(e, seg, track.id, 'move')}
                   >
-                    <div className="resize-handle resize-handle-left" onMouseDown={(e) => handleSegmentMouseDown(e, seg, 'resize-left')} />
+                    <div
+                      className="resize-handle resize-handle-left"
+                      onMouseDown={(e) => handleSegmentMouseDown(e, seg, track.id, 'resize-left')}
+                    />
                     <span className="segment-label">{label}</span>
-                    <div className="resize-handle resize-handle-right" onMouseDown={(e) => handleSegmentMouseDown(e, seg, 'resize-right')} />
+                    <div
+                      className="resize-handle resize-handle-right"
+                      onMouseDown={(e) => handleSegmentMouseDown(e, seg, track.id, 'resize-right')}
+                    />
                   </div>
                 )
               })}
@@ -281,7 +309,7 @@ export default function Timeline({
           </div>
         ))}
 
-        {/* Snap indicator line */}
+        {/* Snap indicator */}
         <div
           ref={snapLineRef}
           style={{

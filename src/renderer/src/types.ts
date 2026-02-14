@@ -49,6 +49,9 @@ export interface Project {
 
 export interface AppState {
   project: Project
+  past: Project[]
+  future: Project[]
+  clipboard: Segment | null
   currentTimeSec: number
   selectedId: string | null
   zoom: number
@@ -56,13 +59,23 @@ export interface AppState {
 }
 
 export type Action =
+  // ── playback / view ──────────────────────────────────────────────────────
   | { type: 'SET_TIME'; t: number }
   | { type: 'SET_PLAYING'; playing: boolean }
   | { type: 'SET_SELECTED'; id: string | null }
   | { type: 'SET_ZOOM'; zoom: number }
+  | { type: 'SET_CLIPBOARD'; segment: Segment | null }
+  // ── history ──────────────────────────────────────────────────────────────
+  | { type: 'UNDO' }
+  | { type: 'REDO' }
+  // ── project load ─────────────────────────────────────────────────────────
   | { type: 'SET_PROJECT'; project: Project }
+  // ── undoable mutations ───────────────────────────────────────────────────
   | { type: 'ADD_VIDEO_SEGMENT'; segment: VideoSegment }
-  | { type: 'ADD_TEXT_SEGMENT'; segment: TextSegment; trackId: string }
-  | { type: 'ADD_TEXT_TRACK'; track: Track }
+  | { type: 'ADD_TEXT_WITH_TRACK'; track: Track; segment: TextSegment }
+  | { type: 'ADD_SEGMENT_TO_TRACK'; trackId: string; segment: Segment }
   | { type: 'UPDATE_SEGMENT'; id: string; patch: Partial<Segment> }
   | { type: 'DELETE_SEGMENT'; id: string }
+  | { type: 'SLICE_AT'; timeUs: number }
+  // ── drag (no history) ────────────────────────────────────────────────────
+  | { type: 'MOVE_SEGMENT'; id: string; patch: Partial<Segment> }
