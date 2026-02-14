@@ -351,6 +351,8 @@ export default function App(): JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null)
   const rafRef = useRef<number | null>(null)
   const playStartRef = useRef<{ wallTime: number; timelineSec: number } | null>(null)
+  // Pending video src to apply after the <video> element mounts on first clip add
+  const pendingVideoSyncRef = useRef<{ src: string; time: number } | null>(null)
 
   // Stable ref so keyboard handler always reads fresh state without re-registering
   const stateRef = useRef(state)
@@ -434,6 +436,15 @@ export default function App(): JSX.Element {
   }, [isPlaying, currentTimeSec, project, startRaf, stopRaf])
 
   useEffect(() => () => stopRaf(), [stopRaf])
+
+  // Apply pending video src once the <video> element mounts (after first clip is added)
+  useEffect(() => {
+    const pending = pendingVideoSyncRef.current
+    if (!pending || !videoRef.current) return
+    videoRef.current.src = pending.src
+    videoRef.current.currentTime = pending.time
+    pendingVideoSyncRef.current = null
+  })
 
   // ── keyboard shortcuts ──────────────────────────────────────────────────────
 
@@ -559,10 +570,8 @@ export default function App(): JSX.Element {
     dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: seg })
     dispatch({ type: 'SET_SELECTED', id: seg.id })
     dispatch({ type: 'SET_TIME', t: startUs / 1e6 })
-    if (videoRef.current) {
-      videoRef.current.src = `file://${info.path}`
-      videoRef.current.currentTime = 0
-    }
+    // Queue src/time — applied after render once the <video> element mounts
+    pendingVideoSyncRef.current = { src: `file://${info.path}`, time: 0 }
   }, [project])
 
   const handleAddText = useCallback(() => {
@@ -629,10 +638,7 @@ export default function App(): JSX.Element {
     dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: seg })
     dispatch({ type: 'SET_SELECTED', id: seg.id })
     dispatch({ type: 'SET_TIME', t: startUs / 1e6 })
-    if (videoRef.current) {
-      videoRef.current.src = `file://${info.path}`
-      videoRef.current.currentTime = 0
-    }
+    pendingVideoSyncRef.current = { src: `file://${info.path}`, time: 0 }
   }, [project])
 
   const handleDropVideoRef = useRef(handleDropVideo)
