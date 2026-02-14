@@ -35,8 +35,6 @@ function applySnap(valueUs: number, snapPts: number[], zoom: number): { value: n
 }
 
 // ── Non-overlap clamping ───────────────────────────────────────────────────
-// Returns a start position that doesn't overlap other clips in the same track.
-// Uses the center of the dragged segment to determine which side each neighbor falls on.
 function clampToTrackGap(
   proposedStart: number,
   durationUs: number,
@@ -69,13 +67,13 @@ function clampToTrackGap(
 interface DragState {
   kind: 'seek' | 'move' | 'resize-left' | 'resize-right'
   segId?: string
-  trackId?: string
+  trackId?: string   // original track
   startX: number
-  startY?: number       // for drag-to-track detection
+  startY?: number
   startUs?: number
   durationUs?: number
-  srcStartUs?: number   // sourceStartUs at drag start (for left-resize and clamping)
-  fileDurUs?: number    // fileDurationUs (for right-resize clamping)
+  srcStartUs?: number
+  fileDurUs?: number
 }
 
 // ── Props ──────────────────────────────────────────────────────────────────
@@ -92,6 +90,7 @@ interface TimelineProps {
   onZoomChange: (zoom: number) => void
   onMoveSegmentToNewTrack: (fromTrackId: string, segId: string) => void
   onMoveSegmentBetweenTracks: (fromTrackId: string, segId: string, toTrackId: string) => void
+  onPackBaseTrack: () => void
 }
 
 function formatTime(sec: number): string {
@@ -111,14 +110,20 @@ function getRulerInterval(zoom: number): { major: number; minor: number } {
 export default function Timeline({
   project, currentTimeSec, selectedId, zoom,
   onSeek, onSelectSegment, onUpdateSegment, onDuplicateSegment, onDropVideo,
-  onZoomChange, onMoveSegmentToNewTrack, onMoveSegmentBetweenTracks
+  onZoomChange, onMoveSegmentToNewTrack, onMoveSegmentBetweenTracks, onPackBaseTrack
 }: TimelineProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState | null>(null)
   const snapLineRef = useRef<HTMLDivElement>(null)
   const [dropActive, setDropActive] = useState(false)
 
-  // Stable refs so the mouse event effect doesn't need to re-register on every change
+  // Live drag-to-track visual: which track the dragged clip appears in right now
+  const [dragVisualTrackId, setDragVisualTrackId] = useState<string | null>(null)
+  const dragVisualTrackIdRef = useRef<string | null>(null)
+  // Whether cursor is above all track rows during move drag (triggers new overlay on mouseup)
+  const dragAboveRowsRef = useRef(false)
+
+  // Stable refs so mouse event handlers stay registered once
   const zoomRef = useRef(zoom)
   const onSeekRef = useRef(onSeek)
   const onUpdateSegmentRef = useRef(onUpdateSegment)
@@ -126,6 +131,7 @@ export default function Timeline({
   const onZoomChangeRef = useRef(onZoomChange)
   const onMoveSegmentToNewTrackRef = useRef(onMoveSegmentToNewTrack)
   const onMoveSegmentBetweenTracksRef = useRef(onMoveSegmentBetweenTracks)
+  const onPackBaseTrackRef = useRef(onPackBaseTrack)
   zoomRef.current = zoom
   onSeekRef.current = onSeek
   onUpdateSegmentRef.current = onUpdateSegment
@@ -133,6 +139,7 @@ export default function Timeline({
   onZoomChangeRef.current = onZoomChange
   onMoveSegmentToNewTrackRef.current = onMoveSegmentToNewTrack
   onMoveSegmentBetweenTracksRef.current = onMoveSegmentBetweenTracks
+  onPackBaseTrackRef.current = onPackBaseTrack
 
   const updateSnapLine = (snapAtUs: number | null) => {
     const el = snapLineRef.current
@@ -142,7 +149,11 @@ export default function Timeline({
     el.style.display = 'block'
   }
 
-  // ── Global mouse handlers (stable, registered once) ────────────────────────
+  // ── Helper: compute displayed track order (same as render) ─────────────────
+  const getDisplayedTracks = (proj: Project) =>
+    [...proj.tracks].reverse().filter((t) => t.type === 'video' || t.segments.length > 0)
+
+  // ── Global mouse handlers ──────────────────────────────────────────────────
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       const drag = dragRef.current
@@ -168,6 +179,8 @@ export default function Timeline({
       const snapPts = collectSnapPoints(projectRef.current, drag.segId)
 
       if (drag.kind === 'move') {
+        // Use liveTrackId as the clamping track (where clip appears visually)
+        const clampTrackId = dragVisualTrackIdRef.current ?? drag.trackId!
         const naturalUs = Math.max(0, drag.startUs! + dtUs)
         const naturalEndUs = naturalUs + drag.durationUs!
         const { value: snappedStart, snapAt: snapA } = applySnap(naturalUs, snapPts, zoom)
@@ -180,29 +193,35 @@ export default function Timeline({
         } else {
           finalStart = naturalUs; snapAt = null
         }
-        // Clamp to track gap — prevent overlapping other clips in the same track
-        const clamped = drag.trackId
-          ? clampToTrackGap(Math.max(0, finalStart), drag.durationUs!, drag.segId, drag.trackId, projectRef.current)
-          : Math.max(0, finalStart)
+        const clamped = clampToTrackGap(Math.max(0, finalStart), drag.durationUs!, drag.segId, clampTrackId, projectRef.current)
         onUpdateSegmentRef.current(drag.segId, { startUs: clamped })
         updateSnapLine(snapAt)
+
+        // ── Live drag-to-track: update visual track when cursor row changes ──
+        const relY = e.clientY - rect.top + containerRef.current.scrollTop
+        const rowIndex = Math.floor((relY - RULER_H) / TRACK_H)
+        const dispTracks = getDisplayedTracks(projectRef.current)
+        dragAboveRowsRef.current = rowIndex < 0
+
+        const newLiveId = (rowIndex >= 0 && rowIndex < dispTracks.length)
+          ? dispTracks[rowIndex].id
+          : drag.trackId!  // above/below: stay in original track visually
+
+        if (newLiveId !== dragVisualTrackIdRef.current) {
+          dragVisualTrackIdRef.current = newLiveId
+          setDragVisualTrackId(newLiveId)  // triggers re-render for immediate visual
+        }
 
       } else if (drag.kind === 'resize-left') {
         const naturalUs = Math.max(0, drag.startUs! + dtUs)
         const srcStart = drag.srcStartUs ?? 0
-        // Can't go earlier than when sourceStartUs would become negative
         const minStart = Math.max(0, drag.startUs! - srcStart)
-        // Can't go later than leaving a minimum segment
         const maxStart = drag.startUs! + drag.durationUs! - 100_000
         const { value: snapped, snapAt } = applySnap(naturalUs, snapPts, zoom)
         const clampedNatural = Math.max(minStart, Math.min(maxStart, snapped))
         const newDur = drag.startUs! + drag.durationUs! - clampedNatural
         const newSrcStart = srcStart + (clampedNatural - drag.startUs!)
-        const patch: Partial<Segment> = {
-          startUs: clampedNatural,
-          durationUs: newDur,
-          sourceDurationUs: newDur
-        }
+        const patch: Partial<Segment> = { startUs: clampedNatural, durationUs: newDur, sourceDurationUs: newDur }
         if (drag.srcStartUs !== undefined) {
           (patch as Partial<VideoSegment>).sourceStartUs = Math.max(0, newSrcStart)
         }
@@ -212,7 +231,6 @@ export default function Timeline({
       } else if (drag.kind === 'resize-right') {
         const naturalEndUs = drag.startUs! + drag.durationUs! + dtUs
         const { value: snapped, snapAt } = applySnap(naturalEndUs, snapPts, zoom)
-        // Clamp: can't extend past source file end
         const maxEndUs = drag.fileDurUs !== undefined
           ? drag.startUs! + (drag.fileDurUs - (drag.srcStartUs ?? 0))
           : Infinity
@@ -228,28 +246,35 @@ export default function Timeline({
       dragRef.current = null
       updateSnapLine(null)
 
-      if (drag?.kind === 'move' && drag.trackId && drag.segId && drag.startY !== undefined) {
-        if (!containerRef.current) return
+      if (drag?.kind === 'move' && drag.trackId && drag.segId) {
+        const liveId = dragVisualTrackIdRef.current
+        const aboveRows = dragAboveRowsRef.current
 
-        const proj = projectRef.current
-        const displayedTracks = [...proj.tracks].reverse()
-          .filter((t) => t.type === 'video' || t.segments.length > 0)
-
-        const containerRect = containerRef.current.getBoundingClientRect()
-        const relY = e.clientY - containerRect.top + containerRef.current.scrollTop
-        const rowIndex = Math.floor((relY - RULER_H) / TRACK_H)
-
-        if (rowIndex < 0 && e.clientY - drag.startY < -TRACK_H / 2) {
-          // Dragged above the ruler → create new overlay track
+        if (liveId && liveId !== drag.trackId) {
+          // Dropped into a different existing track row
+          onMoveSegmentBetweenTracksRef.current(drag.trackId, drag.segId, liveId)
+        } else if (aboveRows && drag.startY !== undefined && e.clientY - drag.startY < -TRACK_H / 2) {
+          // Dragged above all rows → create new overlay track
           onMoveSegmentToNewTrackRef.current(drag.trackId, drag.segId)
-        } else if (rowIndex >= 0 && rowIndex < displayedTracks.length) {
-          const targetTrack = displayedTracks[rowIndex]
-          if (targetTrack.id !== drag.trackId) {
-            // Dragged into a different existing track row
-            onMoveSegmentBetweenTracksRef.current(drag.trackId, drag.segId, targetTrack.id)
-          }
+        }
+
+        // Pack base track if the drag involved it
+        const baseTrackId = projectRef.current.tracks[0]?.id
+        if (drag.trackId === baseTrackId || liveId === baseTrackId) {
+          onPackBaseTrackRef.current()
+        }
+      } else if (drag && (drag.kind === 'resize-left' || drag.kind === 'resize-right')) {
+        // Pack base track after resize too (closes any gap created by shortening a clip)
+        const baseTrackId = projectRef.current.tracks[0]?.id
+        if (drag.trackId === baseTrackId) {
+          onPackBaseTrackRef.current()
         }
       }
+
+      // Reset live drag visual
+      dragVisualTrackIdRef.current = null
+      dragAboveRowsRef.current = false
+      setDragVisualTrackId(null)
     }
 
     window.addEventListener('mousemove', onMove)
@@ -268,8 +293,7 @@ export default function Timeline({
       if (!e.ctrlKey) return
       e.preventDefault()
       const factor = 1 - e.deltaY * 0.01
-      const newZoom = Math.round(Math.max(20, Math.min(500, zoomRef.current * factor)))
-      onZoomChangeRef.current(newZoom)
+      onZoomChangeRef.current(Math.round(Math.max(20, Math.min(500, zoomRef.current * factor))))
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
@@ -287,10 +311,7 @@ export default function Timeline({
     const onDragLeave = (e: DragEvent) => {
       if (!el.contains(e.relatedTarget as Node)) setDropActive(false)
     }
-    const onDrop = (e: DragEvent) => {
-      e.preventDefault()
-      setDropActive(false)
-    }
+    const onDrop = (e: DragEvent) => { e.preventDefault(); setDropActive(false) }
     el.addEventListener('dragover', onDragOver)
     el.addEventListener('dragleave', onDragLeave)
     el.addEventListener('drop', onDrop)
@@ -313,7 +334,7 @@ export default function Timeline({
     e.preventDefault()
   }
 
-  // ── Segment mousedown — move / resize / Option+duplicate ──────────────────
+  // ── Segment mousedown ──────────────────────────────────────────────────────
   const handleSegmentMouseDown = (
     e: React.MouseEvent,
     seg: Segment,
@@ -323,10 +344,11 @@ export default function Timeline({
     e.stopPropagation()
     e.preventDefault()
 
-    // Option (alt) + move → duplicate first, then drag the copy
     if (kind === 'move' && e.altKey) {
       const newSeg = { ...seg, id: uid() }
       onDuplicateSegment(trackId, newSeg)
+      dragVisualTrackIdRef.current = trackId
+      setDragVisualTrackId(trackId)
       dragRef.current = {
         kind: 'move', segId: newSeg.id, trackId,
         startX: e.clientX, startY: e.clientY,
@@ -337,6 +359,9 @@ export default function Timeline({
 
     onSelectSegment(seg.id)
     const vSeg = seg.type === 'video' ? (seg as VideoSegment) : null
+    // Initialise live track to current track
+    dragVisualTrackIdRef.current = trackId
+    setDragVisualTrackId(trackId)
     dragRef.current = {
       kind, segId: seg.id, trackId,
       startX: e.clientX, startY: e.clientY,
@@ -356,9 +381,28 @@ export default function Timeline({
   }
   totalSec += 5
 
-  // Reverse display: video (base) at bottom, overlays on top
-  const displayedTracks = [...project.tracks].reverse()
-    .filter((t) => t.type === 'video' || t.segments.length > 0)
+  const displayedTracks = getDisplayedTracks(project)
+
+  // ── Live drag visual: override which track the dragged clip appears in ──────
+  const dragSegId = dragVisualTrackId !== null ? dragRef.current?.segId ?? null : null
+  const dragOrigTrackId = dragSegId ? dragRef.current?.trackId ?? null : null
+
+  let displayedTracksForRender = displayedTracks
+  if (dragSegId && dragVisualTrackId && dragVisualTrackId !== dragOrigTrackId) {
+    const allSegs = project.tracks.flatMap((t) => t.segments)
+    const dragSeg = allSegs.find((s) => s.id === dragSegId) ?? null
+    if (dragSeg) {
+      displayedTracksForRender = displayedTracks.map((track) => {
+        if (track.id === dragOrigTrackId) {
+          return { ...track, segments: track.segments.filter((s) => s.id !== dragSegId) }
+        }
+        if (track.id === dragVisualTrackId) {
+          return { ...track, segments: [...track.segments, dragSeg] }
+        }
+        return track
+      }).filter((t) => t.type === 'video' || t.segments.length > 0)
+    }
+  }
 
   const innerWidth = LABEL_W + totalSec * zoom
   const playheadLeft = LABEL_W + currentTimeSec * zoom
@@ -367,8 +411,7 @@ export default function Timeline({
   for (let t = 0; t <= totalSec + minor; t = parseFloat((t + minor).toFixed(6))) {
     ticks.push({ t, isMajor: Math.abs(t % major) < 0.001 || Math.abs(t % major - major) < 0.001 })
   }
-
-  const trackAreaH = RULER_H + displayedTracks.length * TRACK_H
+  const trackAreaH = RULER_H + displayedTracksForRender.length * TRACK_H
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -391,39 +434,50 @@ export default function Timeline({
           </div>
         </div>
 
-        {/* Track rows — reversed so video track is at the bottom */}
-        {displayedTracks.map((track) => (
-          <div key={track.id} className="track-row" style={{ height: TRACK_H }}>
-            <div className="track-label" style={{ width: LABEL_W, height: TRACK_H }}>{track.label}</div>
-            <div className="track-segments" style={{ position: 'relative', height: TRACK_H }}>
-              {track.segments.map((seg) => {
-                const left = seg.startUs / 1e6 * zoom
-                const width = Math.max(8, seg.durationUs / 1e6 * zoom)
-                const isSelected = seg.id === selectedId
-                const label = seg.type === 'video' ? (seg as any).name : (seg as any).text
-                return (
-                  <div
-                    key={seg.id}
-                    className={`segment type-${seg.type}${isSelected ? ' selected' : ''}`}
-                    style={{ left, width }}
-                    onClick={(e) => { e.stopPropagation(); onSelectSegment(seg.id) }}
-                    onMouseDown={(e) => handleSegmentMouseDown(e, seg, track.id, 'move')}
-                  >
+        {/* Track rows */}
+        {displayedTracksForRender.map((track, rowIdx) => {
+          const isBase = track.id === project.tracks[0]?.id
+          return (
+            <div
+              key={track.id}
+              className={`track-row${isBase ? ' track-row-base' : ''}`}
+              style={{ height: TRACK_H }}
+            >
+              <div className="track-label" style={{ width: LABEL_W, height: TRACK_H }}>
+                {track.label}
+              </div>
+              <div className="track-segments" style={{ position: 'relative', height: TRACK_H }}>
+                {track.segments.map((seg) => {
+                  const left = seg.startUs / 1e6 * zoom
+                  const width = Math.max(8, seg.durationUs / 1e6 * zoom)
+                  const isSelected = seg.id === selectedId
+                  const label = seg.type === 'video' ? (seg as any).name : (seg as any).text
+                  // Highlight if this seg is being dragged to this row
+                  const isLiveDragged = seg.id === dragSegId && track.id === dragVisualTrackId
+                  return (
                     <div
-                      className="resize-handle resize-handle-left"
-                      onMouseDown={(e) => handleSegmentMouseDown(e, seg, track.id, 'resize-left')}
-                    />
-                    <span className="segment-label">{label}</span>
-                    <div
-                      className="resize-handle resize-handle-right"
-                      onMouseDown={(e) => handleSegmentMouseDown(e, seg, track.id, 'resize-right')}
-                    />
-                  </div>
-                )
-              })}
+                      key={seg.id}
+                      className={`segment type-${seg.type}${isSelected ? ' selected' : ''}${isLiveDragged ? ' dragging' : ''}`}
+                      style={{ left, width }}
+                      onClick={(e) => { e.stopPropagation(); onSelectSegment(seg.id) }}
+                      onMouseDown={(e) => handleSegmentMouseDown(e, seg, track.id, 'move')}
+                    >
+                      <div
+                        className="resize-handle resize-handle-left"
+                        onMouseDown={(e) => handleSegmentMouseDown(e, seg, track.id, 'resize-left')}
+                      />
+                      <span className="segment-label">{label}</span>
+                      <div
+                        className="resize-handle resize-handle-right"
+                        onMouseDown={(e) => handleSegmentMouseDown(e, seg, track.id, 'resize-right')}
+                      />
+                    </div>
+                  )
+                })}
+              </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
 
         {/* Snap indicator */}
         <div

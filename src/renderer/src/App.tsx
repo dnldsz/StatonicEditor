@@ -59,6 +59,47 @@ const initialState: AppState = {
   isPlaying: false
 }
 
+// ── packBaseTrack: sort + close gaps in the base track, shift linked overlays ──
+
+function packBaseTrack(project: Project): Project {
+  const baseTrack = project.tracks[0]
+  if (!baseTrack || baseTrack.type !== 'video' || baseTrack.segments.length === 0) return project
+
+  const sorted = [...baseTrack.segments].sort((a, b) => a.startUs - b.startUs)
+
+  // Compute old→new startUs for each base clip
+  const oldStart = new Map<string, number>()
+  const newStart = new Map<string, number>()
+  let cursor = 0
+  for (const seg of sorted) {
+    oldStart.set(seg.id, seg.startUs)
+    newStart.set(seg.id, cursor)
+    cursor += seg.durationUs
+  }
+
+  const newBaseSegs = sorted.map((seg) => ({ ...seg, startUs: newStart.get(seg.id)! }))
+
+  // Shift overlay/text segments: find which base clip the segment's center falls within,
+  // apply the same delta so overlays follow their linked base clip
+  const newTracks = project.tracks.map((t, i) => {
+    if (i === 0) return { ...t, segments: newBaseSegs }
+    const newSegs = t.segments.map((seg) => {
+      const center = seg.startUs + seg.durationUs / 2
+      let delta = 0
+      for (const bs of sorted) {
+        if (center >= bs.startUs && center < bs.startUs + bs.durationUs) {
+          delta = newStart.get(bs.id)! - oldStart.get(bs.id)!
+          break
+        }
+      }
+      return delta !== 0 ? { ...seg, startUs: Math.max(0, seg.startUs + delta) } : seg
+    })
+    return { ...t, segments: newSegs }
+  })
+
+  return { ...project, tracks: newTracks }
+}
+
 // ── inner project reducer (pure, no history) ──────────────────────────────────
 
 function applyProjectAction(project: Project, action: Action): Project {
@@ -95,9 +136,8 @@ function applyProjectAction(project: Project, action: Action): Project {
     case 'DELETE_SEGMENT': {
       const tracks = project.tracks
         .map((t) => ({ ...t, segments: t.segments.filter((s) => s.id !== action.id) }))
-        // Keep the first track always (base video); drop empty non-base tracks
         .filter((t, i) => i === 0 || t.segments.length > 0)
-      return { ...project, tracks }
+      return packBaseTrack({ ...project, tracks })
     }
 
     case 'MOVE_SEGMENT_TO_TRACK': {
@@ -117,11 +157,10 @@ function applyProjectAction(project: Project, action: Action): Project {
         label: seg.type === 'video' ? 'OVERLAY' : `TEXT ${textCount + 1}`,
         segments: [seg]
       }
-      // Append at end (highest array index = highest z-layer)
       const withNew = [...tracks, newTrack]
-      // Clean up empty non-base tracks
       const cleaned = withNew.filter((t, i) => i === 0 || t.segments.length > 0)
-      return { ...project, tracks: cleaned }
+      // Pack base track to close any gap left by moving the segment out
+      return packBaseTrack({ ...project, tracks: cleaned })
     }
 
     case 'MOVE_SEGMENT_BETWEEN_TRACKS': {
@@ -213,6 +252,11 @@ function reducer(state: AppState, action: Action): AppState {
   // project load — clears history
   if (action.type === 'SET_PROJECT') {
     return { ...state, project: action.project, past: [], future: [], currentTimeSec: 0, selectedId: null }
+  }
+
+  // pack base track — no history (triggered on drag end)
+  if (action.type === 'PACK_BASE_TRACK') {
+    return { ...state, project: packBaseTrack(state.project) }
   }
 
   // drag update — no history
@@ -618,6 +662,12 @@ export default function App(): JSX.Element {
     dispatch({ type: 'MOVE_SEGMENT_BETWEEN_TRACKS', segId, fromTrackId, toTrackId })
   }, [])
 
+  // ── pack base track after drag (close gaps, shift linked overlays) ───────────
+
+  const handlePackBaseTrack = useCallback(() => {
+    dispatch({ type: 'PACK_BASE_TRACK' })
+  }, [])
+
   // ── selected segment ────────────────────────────────────────────────────────
 
   const selectedSegment = selectedId
@@ -712,6 +762,7 @@ export default function App(): JSX.Element {
           onZoomChange={(z) => dispatch({ type: 'SET_ZOOM', zoom: z })}
           onMoveSegmentToNewTrack={handleMoveSegmentToNewTrack}
           onMoveSegmentBetweenTracks={handleMoveSegmentBetweenTracks}
+          onPackBaseTrack={handlePackBaseTrack}
         />
       </div>
     </div>

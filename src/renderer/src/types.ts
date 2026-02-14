@@ -88,3 +88,4 @@ export type Action =
   | { type: 'MOVE_SEGMENT_BETWEEN_TRACKS'; segId: string; fromTrackId: string; toTrackId: string }
   // ── drag (no history) ────────────────────────────────────────────────────
   | { type: 'MOVE_SEGMENT'; id: string; patch: Partial<Segment> }
+  | { type: 'PACK_BASE_TRACK' }

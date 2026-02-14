@@ -339,12 +339,28 @@ body {
 
 .segment.selected { border-color: #0a7ef0; }
 
+/* Clip actively being dragged to a new row */
+.segment.dragging { opacity: 0.75; border-color: #f5c518; border-style: dashed; }
+
 .segment.type-video {
-  background: #1c4a8a;
+  background: #1c6a7a;  /* teal, like CapCut */
 }
 
 .segment.type-text {
-  background: #5a2e8c;
+  background: #7a3838;  /* brick red for text, like CapCut */
+}
+
+/* Base video track — slightly taller, distinct background */
+.track-row-base {
+  background: rgba(255, 255, 255, 0.02);
+}
+.track-row-base .track-label {
+  color: #aaa;
+}
+.track-row-base .segment.type-video {
+  background: #1a7a8a;
+  top: 2px;
+  bottom: 2px;
 }
 
 .segment-label {
