@@ -27,6 +27,16 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('batch-file-changed', handler)
     return () => ipcRenderer.removeListener('batch-file-changed', handler)
   },
+  onFilterRequestChanged: (cb: (filter: { category: string; accountId: string; requestedAt: string }) => void) => {
+    const handler = (_event: any, filter: any) => cb(filter)
+    ipcRenderer.on('filter-request-changed', handler)
+    return () => ipcRenderer.removeListener('filter-request-changed', handler)
+  },
+  onLoadProjectRequest: (cb: (data: { project: any; path: string }) => void) => {
+    const handler = (_event: any, data: any) => cb(data)
+    ipcRenderer.on('load-project-request', handler)
+    return () => ipcRenderer.removeListener('load-project-request', handler)
+  },
   // Clip Library
   importClip: (sourcePath: string, accountId?: string) => ipcRenderer.invoke('import-clip', sourcePath, accountId),
   getClipLibrary: () => ipcRenderer.invoke('get-clip-library'),
@@ -35,5 +45,6 @@ contextBridge.exposeInMainWorld('api', {
   // Accounts
   getAccounts: () => ipcRenderer.invoke('get-accounts'),
   createAccount: (name: string) => ipcRenderer.invoke('create-account', name),
-  updateAccount: (accountId: string, updates: any) => ipcRenderer.invoke('update-account', accountId, updates)
+  updateAccount: (accountId: string, updates: any) => ipcRenderer.invoke('update-account', accountId, updates),
+  setCurrentAccount: (accountId: string | null) => ipcRenderer.invoke('set-current-account', accountId)
 })

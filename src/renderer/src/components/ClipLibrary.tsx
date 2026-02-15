@@ -14,6 +14,7 @@ export default function ClipLibrary({ onSelectClip, onRefresh, currentAccountId 
   const [loading, setLoading] = useState(false)
   const [isDraggingOver, setIsDraggingOver] = useState(false)
   const [playingId, setPlayingId] = useState<string | null>(null)
+  const [claudeFilter, setClaudeFilter] = useState<string | null>(null)
   const dragCounter = React.useRef(0)
   const videoRefs = React.useRef<Map<string, HTMLVideoElement>>(new Map())
 
@@ -32,6 +33,16 @@ export default function ClipLibrary({ onSelectClip, onRefresh, currentAccountId 
   useEffect(() => {
     loadClips()
   }, [])
+
+  // Listen for Claude filter requests
+  useEffect(() => {
+    const unsubscribe = window.api.onFilterRequestChanged((filter) => {
+      if (filter.accountId === currentAccountId) {
+        setClaudeFilter(filter.category)
+      }
+    })
+    return unsubscribe
+  }, [currentAccountId])
 
   const handleImport = async () => {
     if (!currentAccountId) {
@@ -153,14 +164,24 @@ export default function ClipLibrary({ onSelectClip, onRefresh, currentAccountId 
     setLoading(false)
   }
 
-  const filtered = clips.filter(c =>
-    c.accountId === currentAccountId &&
-    (c.name.toLowerCase().includes(search.toLowerCase()) ||
-    c.category.toLowerCase().includes(search.toLowerCase()) ||
-    c.tags?.some(t => t.toLowerCase().includes(search.toLowerCase())))
-  )
+  const filtered = clips.filter(c => {
+    // Account filter
+    if (c.accountId !== currentAccountId) return false
 
-  const unanalyzedCount = clips.filter(c => !c.analyzed).length
+    // Claude category filter
+    if (claudeFilter && c.category !== claudeFilter) return false
+
+    // Search filter
+    if (search && !(
+      c.name.toLowerCase().includes(search.toLowerCase()) ||
+      c.category.toLowerCase().includes(search.toLowerCase()) ||
+      c.tags?.some(t => t.toLowerCase().includes(search.toLowerCase()))
+    )) return false
+
+    return true
+  })
+
+  const unanalyzedCount = clips.filter(c => !c.analyzed && c.accountId === currentAccountId).length
 
   return (
     <div
@@ -187,15 +208,31 @@ export default function ClipLibrary({ onSelectClip, onRefresh, currentAccountId 
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
+        <button className="btn btn-sm" onClick={loadClips} title="Refresh clip library">
+          ↻ Refresh
+        </button>
         <button className="btn btn-sm" onClick={handleImport} title="Import clip to library">
           + Import
         </button>
       </div>
 
+      {claudeFilter && (
+        <div className="claude-filter-banner">
+          <div className="claude-filter-message">
+            ✨ Filtered by Claude: showing only <strong>{claudeFilter}</strong> clips
+          </div>
+          <button
+            className="claude-filter-clear"
+            onClick={() => setClaudeFilter(null)}
+            title="Clear Claude filter"
+          >×</button>
+        </div>
+      )}
+
       {unanalyzedCount > 0 && (
         <div className="clip-analysis-banner">
           <div className="clip-analysis-message">
-            {unanalyzedCount} clip{unanalyzedCount !== 1 ? 's' : ''} need{unanalyzedCount === 1 ? 's' : ''} analysis
+            {unanalyzedCount} clip{unanalyzedCount !== 1 ? 's' : ''} need{unanalyzedCount === 1 ? 's' : ''} analysis - Use Claude Code to analyze
           </div>
         </div>
       )}
@@ -239,18 +276,66 @@ export default function ClipLibrary({ onSelectClip, onRefresh, currentAccountId 
                   onEnded={() => setPlayingId(null)}
                 />
                 <div className="clip-duration">{clip.duration.toFixed(1)}s</div>
-                <button
-                  className="clip-preview-btn"
-                  onClick={(e) => handleTogglePlay(clip.id, e)}
-                  title={playingId === clip.id ? "Pause preview" : "Play preview"}
-                >{playingId === clip.id ? '⏸' : '▶'}</button>
+                {clip.analyzed && (
+                  <div className="clip-hover-tooltip">
+                    <div className="tooltip-section">
+                      <div className="tooltip-label">Description</div>
+                      <div className="tooltip-value">{clip.description || 'No description'}</div>
+                    </div>
+                    {clip.tags && clip.tags.length > 0 && (
+                      <div className="tooltip-section">
+                        <div className="tooltip-label">All Tags ({clip.tags.length})</div>
+                        <div className="tooltip-tags">
+                          {clip.tags.map(tag => (
+                            <span key={tag} className="tooltip-tag">{tag}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="tooltip-section">
+                      <div className="tooltip-label">Details</div>
+                      <div className="tooltip-details">
+                        <div>Category: <strong>{clip.category}</strong></div>
+                        <div>Mood: <strong>{clip.mood}</strong></div>
+                        {clip.subject_visible !== undefined && (
+                          <div>Subject: <strong>{clip.subject_visible ? clip.subject_position : 'None visible'}</strong></div>
+                        )}
+                        {clip.setting && <div>Setting: <strong>{clip.setting}</strong></div>}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="clip-info">
-                <div className="clip-name" title={clip.name}>{clip.name}</div>
+                <div className="clip-name">
+                  <span title={clip.name}>{clip.name}</span>
+                  <button
+                    className="clip-preview-btn"
+                    onClick={(e) => handleTogglePlay(clip.id, e)}
+                    title={playingId === clip.id ? "Pause preview" : "Play preview"}
+                  >{playingId === clip.id ? '⏸' : '▶'}</button>
+                </div>
                 <div className="clip-meta">
                   {clip.width}×{clip.height}
-                  {clip.category !== 'uncategorized' && ` • ${clip.category}`}
+                  {clip.analyzed && clip.category && clip.category !== 'uncategorized' && (
+                    <span className={`clip-category-badge clip-category-${clip.category}`}>
+                      {clip.category}
+                    </span>
+                  )}
+                  {clip.analyzed && clip.mood && (
+                    <span className="clip-mood" title={clip.mood}>
+                      {clip.mood === 'focused' ? '🎯' : clip.mood === 'energetic' ? '⚡' : clip.mood === 'calm' ? '🌊' : '💼'}
+                    </span>
+                  )}
                 </div>
+                {clip.analyzed && clip.tags && clip.tags.length > 0 && (
+                  <div className="clip-tags">
+                    {clip.tags.slice(0, 3).map(tag => (
+                      <span key={tag} className="clip-tag">{tag}</span>
+                    ))}
+                    {clip.tags.length > 3 && <span className="clip-tag">+{clip.tags.length - 3}</span>}
+                  </div>
+                )}
               </div>
               <button
                 className="clip-delete"

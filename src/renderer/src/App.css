@@ -7,14 +7,16 @@
 
 /* ── Fonts ───────────────────────────────────────────────────────────────── */
 @font-face {
-  font-family: 'TikTokText';
-  src: url('/fonts/TikTokTextMedium.otf') format('opentype');
+  font-family: 'TikTok Sans';
+  src: url('./fonts/TikTokSans-Medium.ttf') format('truetype');
   font-weight: 400;
+  font-style: normal;
 }
 @font-face {
-  font-family: 'TikTokText';
-  src: url('/fonts/TikTokTextBold.otf') format('opentype');
+  font-family: 'TikTok Sans';
+  src: url('./fonts/TikTokSans-Medium.ttf') format('truetype');
   font-weight: 700;
+  font-style: normal;
 }
 
 /* ── Reset & Base ─────────────────────────────────────────────────────────── */
@@ -657,6 +659,9 @@ textarea.prop-input {
   padding: 10px;
   border-bottom: 1px solid #2e2e2e;
   flex-shrink: 0;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .clip-analysis-banner {
@@ -673,8 +678,50 @@ textarea.prop-input {
   text-align: center;
 }
 
+/* Claude filter banner */
+.claude-filter-banner {
+  background: linear-gradient(135deg, #2a1a5a 0%, #1a1a4a 100%);
+  border-bottom: 1px solid #4a2a8a;
+  padding: 8px 10px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.claude-filter-message {
+  font-size: 11px;
+  font-weight: 600;
+  color: #b89aff;
+  flex: 1;
+  text-align: center;
+}
+
+.claude-filter-clear {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+  color: #e0e0e0;
+  font-size: 16px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s;
+  padding: 0;
+  line-height: 1;
+}
+
+.claude-filter-clear:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
 .clip-search {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   background: #2a2a2a;
   border: 1px solid #3a3a3a;
   border-radius: 5px;
@@ -682,7 +729,6 @@ textarea.prop-input {
   font-size: 12px;
   padding: 6px 8px;
   outline: none;
-  margin-bottom: 8px;
   transition: border-color 0.15s;
 }
 
@@ -698,10 +744,12 @@ textarea.prop-input {
 .clip-grid {
   flex: 1;
   overflow-y: auto;
+  overflow-x: visible; /* Allow tooltips to extend beyond grid */
   padding: 8px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0; /* Important: allows flex child to scroll */
 }
 
 .clip-library-empty {
@@ -723,6 +771,9 @@ textarea.prop-input {
   overflow: hidden;
   cursor: pointer;
   transition: border-color 0.15s, transform 0.15s;
+  flex-shrink: 0; /* Prevent cards from shrinking */
+  width: 100%;
+  max-width: 100%; /* Ensure cards don't overflow */
 }
 
 .clip-card:hover {
@@ -741,13 +792,18 @@ textarea.prop-input {
 .clip-thumb {
   position: relative;
   width: 100%;
-  aspect-ratio: 9 / 16;
+  aspect-ratio: 9 / 16; /* Portrait - 9 wide, 16 tall */
   background: #000;
   overflow: hidden;
+  display: block;
 }
 
 /* Fallback for browsers that don't support aspect-ratio */
 @supports not (aspect-ratio: 9 / 16) {
+  .clip-thumb {
+    height: 0;
+    padding-bottom: calc(100% * 16 / 9); /* 177.78% for 9:16 */
+  }
   .clip-thumb::before {
     content: '';
     display: block;
@@ -790,10 +846,19 @@ textarea.prop-input {
   font-size: 12px;
   font-weight: 500;
   color: #ddd;
+  margin-bottom: 2px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0; /* Allow text to shrink */
+}
+
+.clip-name > span {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-bottom: 2px;
+  flex: 1;
+  min-width: 0;
 }
 
 .clip-meta {
@@ -878,21 +943,18 @@ textarea.prop-input {
 
 /* Clip preview button */
 .clip-preview-btn {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: rgba(10, 126, 240, 0.9);
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  background: rgba(10, 126, 240, 0.8);
   border: none;
   color: #fff;
-  font-size: 14px;
+  font-size: 10px;
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s, transform 0.15s;
-  display: flex;
+  transition: background 0.15s;
+  margin-left: 6px;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
   padding-left: 2px;
@@ -900,13 +962,174 @@ textarea.prop-input {
   z-index: 10;
 }
 
-.clip-card:hover .clip-preview-btn {
+.clip-preview-btn:hover {
+  background: rgba(10, 126, 240, 1);
+}
+
+/* Clip category badge */
+.clip-category-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-left: 4px;
+}
+
+.clip-category-math {
+  background: rgba(79, 70, 229, 0.2);
+  color: #a5b4fc;
+}
+
+.clip-category-physics {
+  background: rgba(236, 72, 153, 0.2);
+  color: #f9a8d4;
+}
+
+.clip-category-chemistry {
+  background: rgba(34, 197, 94, 0.2);
+  color: #86efac;
+}
+
+.clip-category-biology {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fcd34d;
+}
+
+.clip-category-coding {
+  background: rgba(14, 165, 233, 0.2);
+  color: #7dd3fc;
+}
+
+.clip-category-generic {
+  background: rgba(107, 114, 128, 0.2);
+  color: #d1d5db;
+}
+
+/* Clip mood indicator */
+.clip-mood {
+  margin-left: 4px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* Clip tags */
+.clip-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.clip-tag {
+  display: inline-block;
+  padding: 1px 5px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  font-size: 9px;
+  color: #999;
+  line-height: 1.4;
+}
+
+/* Similar clips button */
+.clip-similar-btn {
+  position: absolute;
+  top: 4px;
+  right: 28px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.75);
+  border: none;
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.clip-card:hover .clip-similar-btn {
   opacity: 1;
 }
 
-.clip-preview-btn:hover {
-  transform: translate(-50%, -50%) scale(1.1);
-  background: rgba(10, 126, 240, 1);
+.clip-similar-btn:hover {
+  background: rgba(10, 126, 240, 0.9);
+}
+
+/* Hover tooltip for clip metadata */
+.clip-hover-tooltip {
+  position: absolute;
+  inset: 0; /* Cover entire thumbnail */
+  background: rgba(0, 0, 0, 0.95);
+  backdrop-filter: blur(8px);
+  padding: 12px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+  overflow-y: auto;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.clip-thumb:hover .clip-hover-tooltip {
+  opacity: 1;
+}
+
+.tooltip-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tooltip-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #888;
+}
+
+.tooltip-value {
+  font-size: 11px;
+  line-height: 1.4;
+  color: #e0e0e0;
+}
+
+.tooltip-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tooltip-tag {
+  display: inline-block;
+  padding: 2px 6px;
+  background: rgba(10, 126, 240, 0.3);
+  border: 1px solid rgba(10, 126, 240, 0.5);
+  border-radius: 3px;
+  font-size: 10px;
+  color: #6ba3ff;
+  line-height: 1.4;
+}
+
+.tooltip-details {
+  font-size: 10px;
+  color: #aaa;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.tooltip-details strong {
+  color: #e0e0e0;
 }
 
 /* Preview modal */

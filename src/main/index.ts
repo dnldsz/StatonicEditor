@@ -9,6 +9,28 @@ import { randomBytes } from 'crypto'
 // Use PNG for dock (more reliable in dev than .icns)
 const ICON_PATH = join(__dirname, '../../resources/icon.png')
 
+// Config file to store last opened project
+const CONFIG_PATH = join(app.getPath('userData'), 'config.json')
+
+function loadConfig(): { lastProjectPath?: string } {
+  try {
+    if (existsSync(CONFIG_PATH)) {
+      return JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'))
+    }
+  } catch {}
+  return {}
+}
+
+function saveConfig(config: { lastProjectPath?: string }): void {
+  try {
+    const userDataDir = app.getPath('userData')
+    if (!existsSync(userDataDir)) mkdirSync(userDataDir, { recursive: true })
+    writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2))
+  } catch (err) {
+    console.error('Failed to save config:', err)
+  }
+}
+
 // ── Hot-reload: watch the open project file or folder for external changes ──
 let mainWin: BrowserWindow | null = null
 let fileWatcher: FSWatcher | null = null
@@ -107,6 +129,8 @@ function startLoadProjectWatcher(): void {
               mainWin?.webContents.send('load-project-request', { project, path: loadRequest.projectPath })
               // Start watching this project file for changes (e.g., from MCP edits)
               watchProjectFile(loadRequest.projectPath)
+              // Save as last opened project
+              saveConfig({ lastProjectPath: loadRequest.projectPath })
             }
           }
         } catch (err) {
@@ -145,6 +169,21 @@ function createWindow(): BrowserWindow {
   // Prevent Electron from navigating away when files are dropped onto the window
   win.webContents.on('will-navigate', (event) => {
     event.preventDefault()
+  })
+
+  // Auto-load last opened project when window is ready
+  win.webContents.on('did-finish-load', () => {
+    const config = loadConfig()
+    if (config.lastProjectPath && existsSync(config.lastProjectPath)) {
+      try {
+        const project = JSON.parse(readFileSync(config.lastProjectPath, 'utf-8'))
+        win.webContents.send('load-project-request', { project, path: config.lastProjectPath })
+        watchProjectFile(config.lastProjectPath)
+        console.log('[auto-load] Loaded last project:', config.lastProjectPath)
+      } catch (err) {
+        console.error('[auto-load] Failed to load last project:', err)
+      }
+    }
   })
 
   return win
@@ -322,8 +361,13 @@ ipcMain.handle('load-project', async () => {
   })
   if (result.canceled || result.filePaths.length === 0) return null
   try {
-    const raw = readFileSync(result.filePaths[0], 'utf-8')
-    watchProjectFile(result.filePaths[0])
+    const projectPath = result.filePaths[0]
+    const raw = readFileSync(projectPath, 'utf-8')
+    watchProjectFile(projectPath)
+
+    // Save as last opened project
+    saveConfig({ lastProjectPath: projectPath })
+
     return JSON.parse(raw)
   } catch (err: any) {
     return { error: err.message }
@@ -407,12 +451,10 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
 
   const filterParts: string[] = []
 
-  // Helper to generate scale expression for keyframes
-  function getScaleExpression(seg: any, outStart: number, canvas: any): string {
+  // Helper to generate scale filter for keyframes
+  function getScaleFilter(seg: any, outStart: number, canvas: any): { filter: string; needsCentering: boolean } {
     const baseScale = seg.clipScale ?? 1
     const kfs = seg.scaleKeyframes
-
-    // Calculate static scale dimensions
     const srcW = seg.sourceWidth ?? canvas.width
     const srcH = seg.sourceHeight ?? canvas.height
     const cropL = seg.cropLeft ?? 0, cropR = seg.cropRight ?? 0
@@ -426,22 +468,50 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
       const fullW = Math.round((srcW / srcH) * fullH / 2) * 2
       const visW = Math.max(2, Math.round(fullW * cW / 2) * 2)
       const visH = Math.max(2, Math.round(fullH * cH / 2) * 2)
-      return `scale=${visW}:${visH}:force_original_aspect_ratio=disable`
+      return { filter: `scale=${visW}:${visH}:force_original_aspect_ratio=disable`, needsCentering: false }
     }
 
-    // Has keyframes - use zoompan filter for proper animation
-    // For now, use average scale to get exports working
-    // TODO: Implement proper zoompan or frame-by-frame scaling
+    // Has keyframes - use scale with animated expression (smooth, proven approach)
     const sorted = [...kfs].sort((a: any, b: any) => a.timeMs - b.timeMs)
-    const avgScale = sorted.reduce((sum: number, kf: any) => sum + kf.scale, 0) / sorted.length
-    const fullH = Math.round(avgScale * canvas.height / 2) * 2
-    const fullW = Math.round((srcW / srcH) * fullH / 2) * 2
-    const visW = Math.max(2, Math.round(fullW * cW / 2) * 2)
-    const visH = Math.max(2, Math.round(fullH * cH / 2) * 2)
+    const firstKf = sorted[0]
+    const lastKf = sorted[sorted.length - 1]
+    const segDuration = seg.durationUs / 1e6
 
-    // Use static scale for now - animated zoom will require zoompan filter
-    console.warn(`[Export] Keyframe animation not yet supported in export - using average scale ${avgScale.toFixed(2)}`)
-    return `scale=${visW}:${visH}:force_original_aspect_ratio=disable`
+    // Calculate base dimensions (canvas height * scale)
+    const baseH = canvas.height
+    const baseW = Math.round((srcW / srcH) * baseH)
+
+    // Calculate dimensions at first and last keyframe
+    const startH = Math.round(firstKf.scale * baseH)
+    const startW = Math.round((srcW / srcH) * startH)
+    const endH = Math.round(lastKf.scale * baseH)
+    const endW = Math.round((srcW / srcH) * endH)
+
+    // If start and end are identical, use static scale
+    if (Math.abs(startW - endW) < 4 && Math.abs(startH - endH) < 4) {
+      const visW = Math.max(4, Math.round(startW * cW / 4) * 4)
+      const visH = Math.max(4, Math.round(startH * cH / 4) * 4)
+      return { filter: `scale=${visW}:${visH}:force_original_aspect_ratio=disable`, needsCentering: false }
+    }
+
+    // Linear interpolation over segment duration
+    const t0 = outStart
+    const t1 = outStart + segDuration
+
+    // Base dimensions considering crop
+    const cropBaseW = Math.round(baseW * cW)
+    const cropBaseH = Math.round(baseH * cH)
+
+    // Animated scale expression with 4-pixel rounding for smoothness
+    const interpW = `${cropBaseW}*(1+${firstKf.scale - 1}+(${lastKf.scale - firstKf.scale})*(t-${t0})/(${t1}-${t0}))`
+    const interpH = `${cropBaseH}*(1+${firstKf.scale - 1}+(${lastKf.scale - firstKf.scale})*(t-${t0})/(${t1}-${t0}))`
+    const widthExpr = `4*trunc((${interpW})/4)`
+    const heightExpr = `4*trunc((${interpH})/4)`
+
+    return {
+      filter: `scale=w=${widthExpr}:h=${heightExpr}:eval=frame`,
+      needsCentering: true
+    }
   }
 
   // Step 1: crop each segment, scale to display size, and shift PTS to output timeline position
@@ -463,10 +533,10 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
     const outStart = seg.startUs / 1e6
     const ptsShift = `setpts=PTS-STARTPTS+${outStart}/TB`
 
-    const scaleFilter = getScaleExpression(seg, outStart, canvas)
+    const { filter: scaleFilter, needsCentering } = getScaleFilter(seg, outStart, canvas)
 
     filterParts.push(
-      `[${i + 1}:v]${cropFilter}${scaleFilter},fps=fps=30,${ptsShift}[sv${i}]`
+      `[${i + 1}:v]${cropFilter}${scaleFilter},fps=30,${ptsShift}[sv${i}]`
     )
   }
 
@@ -482,20 +552,35 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
     const srcH = seg.sourceHeight ?? canvas.height
     const cropL = seg.cropLeft ?? 0, cropT = seg.cropTop ?? 0
 
-    const fullH = Math.round(clipScale * canvas.height / 2) * 2
-    const fullW = Math.round((srcW / srcH) * fullH / 2) * 2
-
-    // Center of the full frame on canvas, then offset for crop to get top-left of visible area
-    const frameCX = (clipX + 1) / 2 * canvas.width
-    const frameCY = (1 - clipY) / 2 * canvas.height
-    const x = Math.round(frameCX - fullW / 2 + cropL * fullW)
-    const y = Math.round(frameCY - fullH / 2 + cropT * fullH)
-
     const outLabel = i === allVideoSegs.length - 1 ? '[vcomp]' : `[ov${i}]`
 
-    filterParts.push(
-      `${currentIn}[sv${i}]overlay=${x}:${y}:eof_action=pass${outLabel}`
-    )
+    // Animated segments with keyframes need expression-based centering
+    if (seg.scaleKeyframes && seg.scaleKeyframes.length > 0) {
+      // Calculate user's positioning offsets (from clipX, clipY)
+      const userOffsetX = Math.round((clipX + 1) / 2 * canvas.width - canvas.width / 2)
+      const userOffsetY = Math.round((1 - clipY) / 2 * canvas.height - canvas.height / 2)
+
+      // Center the video and add user offsets
+      const xExpr = `(W-w)/2+${userOffsetX}`
+      const yExpr = `(H-h)/2+${userOffsetY}`
+
+      filterParts.push(
+        `${currentIn}[sv${i}]overlay=x='${xExpr}':y='${yExpr}':eval=frame:eof_action=pass${outLabel}`
+      )
+    } else {
+      // Static positioning for non-animated segments
+      const fullH = Math.round(clipScale * canvas.height / 2) * 2
+      const fullW = Math.round((srcW / srcH) * fullH / 2) * 2
+
+      const frameCX = (clipX + 1) / 2 * canvas.width
+      const frameCY = (1 - clipY) / 2 * canvas.height
+      const x = Math.round(frameCX - fullW / 2 + cropL * fullW)
+      const y = Math.round(frameCY - fullH / 2 + cropT * fullH)
+
+      filterParts.push(
+        `${currentIn}[sv${i}]overlay=${x}:${y}:eof_action=pass${outLabel}`
+      )
+    }
     currentIn = outLabel
   }
 
@@ -535,20 +620,31 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
     filePath
   ]
 
+  // Debug: log the full FFmpeg command
+  console.log('\n[export] FFmpeg command:')
+  console.log('ffmpeg', args.join(' '))
+  console.log('\n')
+
   return new Promise((resolve) => {
     const proc = spawn('ffmpeg', args)
+    let stderrOutput = ''
     proc.stderr.on('data', (chunk: Buffer) => {
-      event.sender.send('export-progress', chunk.toString())
+      const text = chunk.toString()
+      stderrOutput += text
+      event.sender.send('export-progress', text)
     })
     proc.on('close', (code) => {
       if (code === 0) {
         shell.showItemInFolder(filePath)
         resolve({ ok: true, filePath })
       } else {
+        console.error('[export] FFmpeg failed with code', code)
+        console.error('[export] stderr output:', stderrOutput)
         resolve({ error: `FFmpeg exited with code ${code}` })
       }
     })
     proc.on('error', (err) => {
+      console.error('[export] FFmpeg error:', err)
       resolve({ error: err.message })
     })
   })
