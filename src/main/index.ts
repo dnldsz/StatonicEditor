@@ -660,10 +660,15 @@ ipcMain.handle('import-clip', async (_event, sourcePath: string, accountId?: str
 
 ipcMain.handle('get-clip-library', async () => {
   const clips: any[] = []
-  const accounts = loadAccounts()
+
+  // Hard-coded accounts matching frontend
+  const hardCodedAccounts = [
+    { id: 'daniel', name: 'Daniel' },
+    { id: 'stacy', name: 'Stacy' }
+  ]
 
   // Load clips for each account
-  for (const account of accounts) {
+  for (const account of hardCodedAccounts) {
     const libraryPath = getClipLibraryPath(account.id)
     if (!existsSync(libraryPath)) continue
 
@@ -689,10 +694,14 @@ ipcMain.handle('get-clip-library', async () => {
 })
 
 ipcMain.handle('delete-clip-from-library', async (_event, clipId: string) => {
-  const accounts = loadAccounts()
+  // Hard-coded accounts matching frontend
+  const hardCodedAccounts = [
+    { id: 'daniel', name: 'Daniel' },
+    { id: 'stacy', name: 'Stacy' }
+  ]
 
   // Search through all account directories
-  for (const account of accounts) {
+  for (const account of hardCodedAccounts) {
     const clipDir = join(getClipLibraryPath(account.id), clipId)
     if (existsSync(clipDir)) {
       rmSync(clipDir, { recursive: true, force: true })
@@ -704,10 +713,14 @@ ipcMain.handle('delete-clip-from-library', async (_event, clipId: string) => {
 })
 
 ipcMain.handle('update-clip-metadata', async (_event, clipId: string, updates: any) => {
-  const accounts = loadAccounts()
+  // Hard-coded accounts matching frontend
+  const hardCodedAccounts = [
+    { id: 'daniel', name: 'Daniel' },
+    { id: 'stacy', name: 'Stacy' }
+  ]
 
   // Search through all account directories
-  for (const account of accounts) {
+  for (const account of hardCodedAccounts) {
     const metadataPath = join(getClipLibraryPath(account.id), clipId, 'metadata.json')
     if (existsSync(metadataPath)) {
       try {
