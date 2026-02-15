@@ -401,7 +401,7 @@ async function renderTextToPng(seg: TextSegment, cw: number, ch: number): Promis
   const ctx = canvas.getContext('2d')!
 
   const effectiveSize = seg.fontSize * (seg.textScale ?? 1)
-  ctx.font = `${seg.italic ? 'italic ' : ''}${seg.bold ? 'bold ' : ''}${effectiveSize}px 'TikTokText', 'Apple Color Emoji', sans-serif`
+  ctx.font = `${seg.italic ? 'italic ' : ''}${seg.bold ? 'bold ' : ''}${effectiveSize}px 'TikTok Sans', 'Apple Color Emoji', sans-serif`
   ctx.textBaseline = 'middle'
   ctx.textAlign = seg.textAlign ?? 'center'
 
@@ -413,7 +413,7 @@ async function renderTextToPng(seg: TextSegment, cw: number, ch: number): Promis
 
   if (seg.strokeEnabled) {
     ctx.strokeStyle = seg.strokeColor ?? '#000000'
-    ctx.lineWidth = effectiveSize * (6.9 / 97.0) * 2
+    ctx.lineWidth = effectiveSize * (6.9 / 97.0) * 2.3
     ctx.lineJoin = 'round'
     lines.forEach((line, i) => {
       if (!line) return
@@ -434,8 +434,6 @@ export default function App(): JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null)
   const rafRef = useRef<number | null>(null)
   const playStartRef = useRef<{ wallTime: number; timelineSec: number } | null>(null)
-  // Pending video src to apply after the <video> element mounts on first clip add
-  const pendingVideoSyncRef = useRef<{ src: string; time: number } | null>(null)
 
   // Stable ref so keyboard handler always reads fresh state without re-registering
   const stateRef = useRef(state)
@@ -446,16 +444,9 @@ export default function App(): JSX.Element {
   // ── seek logic ──────────────────────────────────────────────────────────────
 
   const seekTo = useCallback((t: number) => {
-    const clip = getActiveVideoSegment(project, t)
-    if (clip && videoRef.current) {
-      const videoSrc = pathToFileUrl(clip.src)
-      if (videoRef.current.src !== videoSrc) videoRef.current.src = videoSrc
-      videoRef.current.currentTime = clip.sourceStartUs / 1e6 + (t - clip.startUs / 1e6)
-    } else if (videoRef.current) {
-      videoRef.current.pause()
-    }
     dispatch({ type: 'SET_TIME', t })
-  }, [project])
+    // Video sync happens in useEffect
+  }, [])
 
   // ── play/pause ──────────────────────────────────────────────────────────────
 
@@ -477,23 +468,6 @@ export default function App(): JSX.Element {
         return
       }
       dispatch({ type: 'SET_TIME', t })
-      const clip = getActiveVideoSegment(project, t)
-      if (clip && videoRef.current) {
-        const videoSrc = pathToFileUrl(clip.src)
-        if (videoRef.current.src !== videoSrc) {
-          videoRef.current.src = videoSrc
-          videoRef.current.play().catch(() => {})
-        } else if (videoRef.current.paused) {
-          videoRef.current.play().catch(() => {})
-        }
-        const expected = clip.sourceStartUs / 1e6 + (t - clip.startUs / 1e6)
-        if (Math.abs(videoRef.current.currentTime - expected) > 0.2) {
-          videoRef.current.currentTime = expected
-        }
-      } else if (!clip && videoRef.current && !videoRef.current.paused) {
-        // In a gap — silence the video
-        videoRef.current.pause()
-      }
       rafRef.current = requestAnimationFrame(tick)
     }
     rafRef.current = requestAnimationFrame(tick)
@@ -502,23 +476,52 @@ export default function App(): JSX.Element {
   const togglePlay = useCallback(() => {
     if (isPlaying) {
       stopRaf()
-      videoRef.current?.pause()
       dispatch({ type: 'SET_PLAYING', playing: false })
     } else {
       playStartRef.current = { wallTime: performance.now(), timelineSec: currentTimeSec }
-      const clip = getActiveVideoSegment(project, currentTimeSec)
-      if (clip && videoRef.current) {
-        const videoSrc = pathToFileUrl(clip.src)
-        if (videoRef.current.src !== videoSrc) videoRef.current.src = videoSrc
-        videoRef.current.currentTime = clip.sourceStartUs / 1e6 + (currentTimeSec - clip.startUs / 1e6)
-        videoRef.current.play().catch(() => {})
-      }
       dispatch({ type: 'SET_PLAYING', playing: true })
       startRaf()
     }
-  }, [isPlaying, currentTimeSec, project, startRaf, stopRaf])
+  }, [isPlaying, currentTimeSec, startRaf, stopRaf])
 
   useEffect(() => () => stopRaf(), [stopRaf])
+
+  // ── Sync base video (same approach as Canvas.tsx for overlays) ─────────────
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+
+    const clip = getActiveVideoSegment(project, currentTimeSec)
+    if (!clip) {
+      if (!video.paused) video.pause()
+      return
+    }
+
+    const videoSrc = pathToFileUrl(clip.src)
+    const targetTime = clip.sourceStartUs / 1e6 + (currentTimeSec - clip.startUs / 1e6)
+
+    // Source changed - load new video
+    if (video.src !== videoSrc) {
+      video.src = videoSrc
+      video.currentTime = targetTime
+      if (isPlaying) video.play().catch(() => {})
+      return
+    }
+
+    // Source same - sync playback state and time
+    if (isPlaying) {
+      if (video.paused) {
+        video.currentTime = targetTime
+        video.play().catch(() => {})
+      } else if (Math.abs(video.currentTime - targetTime) > 0.3) {
+        video.currentTime = targetTime
+      }
+    } else {
+      if (!video.paused) video.pause()
+      video.currentTime = targetTime
+    }
+  })
 
   // ── Hard-coded accounts ──────────────────────────────────────────────────
 
@@ -531,14 +534,6 @@ export default function App(): JSX.Element {
     dispatch({ type: 'SET_CURRENT_ACCOUNT', accountId: 'daniel' })
   }, [])
 
-  // Apply pending video src once the <video> element mounts (after first clip is added)
-  useEffect(() => {
-    const pending = pendingVideoSyncRef.current
-    if (!pending || !videoRef.current) return
-    videoRef.current.src = pending.src
-    videoRef.current.currentTime = pending.time
-    pendingVideoSyncRef.current = null
-  })
 
   // ── keyboard shortcuts ──────────────────────────────────────────────────────
 
@@ -697,8 +692,6 @@ export default function App(): JSX.Element {
     dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: seg })
     dispatch({ type: 'SET_SELECTED', id: seg.id })
     dispatch({ type: 'SET_TIME', t: startUs / 1e6 })
-    // Queue src/time — applied after render once the <video> element mounts
-    pendingVideoSyncRef.current = { src: pathToFileUrl(info.path), time: 0 }
   }, [project])
 
   const handleAddText = useCallback(() => {
@@ -765,7 +758,6 @@ export default function App(): JSX.Element {
     dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: seg })
     dispatch({ type: 'SET_SELECTED', id: seg.id })
     dispatch({ type: 'SET_TIME', t: startUs / 1e6 })
-    pendingVideoSyncRef.current = { src: pathToFileUrl(info.path), time: 0 }
   }, [project])
 
   const handleDropVideoRef = useRef(handleDropVideo)
@@ -802,7 +794,6 @@ export default function App(): JSX.Element {
     dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: seg })
     dispatch({ type: 'SET_SELECTED', id: seg.id })
     dispatch({ type: 'SET_TIME', t: timeSec })
-    pendingVideoSyncRef.current = { src: pathToFileUrl(clip.path), time: 0 }
   }, [project])
 
   // ── hot-reload: apply external file changes (e.g. from MCP / Claude) ───────
@@ -816,6 +807,19 @@ export default function App(): JSX.Element {
     })
     return unsub
   }, [])
+
+  // Listen for Claude project load requests
+  useEffect(() => {
+    const unsub = window.api.onLoadProjectRequest(({ project, path }) => {
+      dispatch({ type: 'SET_PROJECT', project })
+      dispatch({ type: 'SET_FILE_PATH', path })
+      // Show toast notification
+      setReloadToast(true)
+      setTimeout(() => setReloadToast(false), 3000)
+    })
+    return unsub
+  }, [])
+
 
   // batch mode hot-reload
   useEffect(() => {
@@ -880,6 +884,11 @@ export default function App(): JSX.Element {
   const handleSelectAccount = useCallback((accountId: string) => {
     dispatch({ type: 'SET_CURRENT_ACCOUNT', accountId })
   }, [])
+
+  // Write current account to state file for MCP server
+  useEffect(() => {
+    window.api.setCurrentAccount(currentAccountId)
+  }, [currentAccountId])
 
   // ── render ──────────────────────────────────────────────────────────────────
 

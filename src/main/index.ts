@@ -12,7 +12,11 @@ const ICON_PATH = join(__dirname, '../../resources/icon.png')
 // ── Hot-reload: watch the open project file or folder for external changes ──
 let mainWin: BrowserWindow | null = null
 let fileWatcher: FSWatcher | null = null
+let filterWatcher: FSWatcher | null = null
+let loadProjectWatcher: FSWatcher | null = null
 let watchDebounce: ReturnType<typeof setTimeout> | null = null
+let filterDebounce: ReturnType<typeof setTimeout> | null = null
+let loadProjectDebounce: ReturnType<typeof setTimeout> | null = null
 
 function watchProjectFile(filePath: string): void {
   if (fileWatcher) { fileWatcher.close(); fileWatcher = null }
@@ -46,6 +50,73 @@ function watchFolder(folderPath: string): void {
   })
 }
 
+function startFilterWatcher(): void {
+  const filterFile = join(app.getPath('appData'), 'Statonic', 'filter-request.json')
+  const filterDir = join(app.getPath('appData'), 'Statonic')
+
+  // Create directory if it doesn't exist
+  if (!existsSync(filterDir)) {
+    mkdirSync(filterDir, { recursive: true })
+  }
+
+  // Watch the directory for the filter file
+  if (filterWatcher) { filterWatcher.close(); filterWatcher = null }
+
+  try {
+    filterWatcher = watch(filterDir, (eventType, filename) => {
+      if (filename !== 'filter-request.json') return
+      if (filterDebounce) clearTimeout(filterDebounce)
+      filterDebounce = setTimeout(() => {
+        try {
+          if (existsSync(filterFile)) {
+            const filterRequest = JSON.parse(readFileSync(filterFile, 'utf-8'))
+            mainWin?.webContents.send('filter-request-changed', filterRequest)
+          }
+        } catch {
+          // ignore parse errors
+        }
+      }, 100)
+    })
+  } catch (err) {
+    console.error('Failed to watch filter file:', err)
+  }
+}
+
+function startLoadProjectWatcher(): void {
+  const loadProjectFile = join(app.getPath('appData'), 'Statonic', 'load-project.json')
+  const loadProjectDir = join(app.getPath('appData'), 'Statonic')
+
+  // Create directory if it doesn't exist
+  if (!existsSync(loadProjectDir)) {
+    mkdirSync(loadProjectDir, { recursive: true })
+  }
+
+  // Watch the directory for load-project requests
+  if (loadProjectWatcher) { loadProjectWatcher.close(); loadProjectWatcher = null }
+
+  try {
+    loadProjectWatcher = watch(loadProjectDir, (eventType, filename) => {
+      if (filename !== 'load-project.json') return
+      if (loadProjectDebounce) clearTimeout(loadProjectDebounce)
+      loadProjectDebounce = setTimeout(() => {
+        try {
+          if (existsSync(loadProjectFile)) {
+            const loadRequest = JSON.parse(readFileSync(loadProjectFile, 'utf-8'))
+            if (existsSync(loadRequest.projectPath)) {
+              const project = JSON.parse(readFileSync(loadRequest.projectPath, 'utf-8'))
+              mainWin?.webContents.send('load-project-request', { project, path: loadRequest.projectPath })
+            }
+          }
+        } catch (err) {
+          console.error('Failed to load project:', err)
+        }
+      }, 100)
+    })
+  } catch (err) {
+    console.error('Failed to watch load-project file:', err)
+  }
+}
+
 function createWindow(): BrowserWindow {
   const preloadPath = join(__dirname, '../preload/index.mjs')
 
@@ -73,6 +144,9 @@ function createWindow(): BrowserWindow {
   win.webContents.on('will-navigate', (event) => {
     event.preventDefault()
   })
+
+  // Open DevTools
+  win.webContents.openDevTools()
 
   return win
 }
@@ -124,6 +198,8 @@ app.whenReady().then(() => {
     }
   }
   mainWin = createWindow()
+  startFilterWatcher() // Watch for Claude filter requests
+  startLoadProjectWatcher() // Watch for Claude project load requests
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) mainWin = createWindow()
   })
@@ -332,7 +408,7 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
 
   const filterParts: string[] = []
 
-  // Step 1: crop each segment then scale to its correct cropped display size
+  // Step 1: crop each segment, scale to display size, and shift PTS to output timeline position
   for (let i = 0; i < allVideoSegs.length; i++) {
     const { seg } = allVideoSegs[i]
     const clipScale = seg.clipScale ?? 1
@@ -355,12 +431,17 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
       ? `crop=iw*${cW}:ih*${cH}:iw*${cropL}:ih*${cropT},`
       : ''
 
+    // Shift PTS so this segment appears at its correct timeline position
+    const outStart = seg.startUs / 1e6
+    const ptsShift = `setpts=PTS-STARTPTS+${outStart}/TB`
+
     filterParts.push(
-      `[${i + 1}:v]${cropFilter}scale=${visW}:${visH}:force_original_aspect_ratio=disable,fps=fps=30[sv${i}]`
+      `[${i + 1}:v]${cropFilter}scale=${visW}:${visH}:force_original_aspect_ratio=disable,fps=fps=30,${ptsShift}[sv${i}]`
     )
   }
 
-  // Step 2: chain overlay filters — each segment placed at the right position and time
+  // Step 2: chain overlay filters — each segment placed at the right position
+  // Timing is controlled by PTS shifting in step 1, so we use shortest=1 to handle duration
   let currentIn = '[0:v]'
   for (let i = 0; i < allVideoSegs.length; i++) {
     const { seg } = allVideoSegs[i]
@@ -380,12 +461,10 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
     const x = Math.round(frameCX - fullW / 2 + cropL * fullW)
     const y = Math.round(frameCY - fullH / 2 + cropT * fullH)
 
-    const outStart = seg.startUs / 1e6
-    const outEnd = (seg.startUs + seg.durationUs) / 1e6
     const outLabel = i === allVideoSegs.length - 1 ? '[vcomp]' : `[ov${i}]`
 
     filterParts.push(
-      `${currentIn}[sv${i}]overlay=${x}:${y}:enable='between(t,${outStart},${outEnd})'${outLabel}`
+      `${currentIn}[sv${i}]overlay=${x}:${y}:eof_action=pass${outLabel}`
     )
     currentIn = outLabel
   }
@@ -404,8 +483,9 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
     textOverlays.forEach((overlay, i) => {
       const inputIdx = 1 + allVideoSegs.length + i
       const outLabel = i === textOverlays.length - 1 ? '[vout]' : `[vto${i}]`
+      // Use gte()*lt() instead of between() to make end time exclusive (start <= t < end)
       filterParts.push(
-        `${vIn}[${inputIdx}:v]overlay=0:0:shortest=1:enable='between(t,${overlay.startSec},${overlay.endSec})'${outLabel}`
+        `${vIn}[${inputIdx}:v]overlay=0:0:shortest=1:enable='gte(t,${overlay.startSec})*lt(t,${overlay.endSec})'${outLabel}`
       )
       vIn = outLabel
     })
@@ -763,4 +843,20 @@ ipcMain.handle('update-account', async (_event, accountId: string, updates: any)
   accounts[index] = { ...accounts[index], ...updates }
   saveAccounts(accounts)
   return accounts[index]
+})
+
+ipcMain.handle('set-current-account', async (_event, accountId: string | null) => {
+  const stateFile = join(app.getPath('appData'), 'Statonic', 'current-state.json')
+  const stateDir = join(app.getPath('appData'), 'Statonic')
+
+  if (!existsSync(stateDir)) {
+    mkdirSync(stateDir, { recursive: true })
+  }
+
+  writeFileSync(stateFile, JSON.stringify({
+    currentAccountId: accountId,
+    updatedAt: new Date().toISOString()
+  }, null, 2))
+
+  return { ok: true }
 })
