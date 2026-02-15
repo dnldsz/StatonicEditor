@@ -199,7 +199,10 @@ export default function Canvas({
     let xSnaps: SnapTarget[] = [{ val: 0, line: 50 }]
     let ySnaps: SnapTarget[] = [{ val: 0, line: 50 }]
     if (kind === 'video' && seg) {
-      const clipScale = seg.clipScale ?? 1
+      // Use interpolated scale for accurate snap calculations
+      const segStartSec = seg.startUs / 1e6
+      const timeWithinSegMs = (currentTimeSec - segStartSec) * 1000
+      const clipScale = getInterpolatedScale(seg, timeWithinSegMs)
       const srcW = seg.sourceWidth ?? canvas.width
       const srcH = seg.sourceHeight ?? canvas.height
       const cropL = seg.cropLeft ?? 0, cropR = seg.cropRight ?? 0
@@ -261,7 +264,7 @@ export default function Canvas({
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
-  }, [getRect, onSelectSegment, onUpdateSegment, canvas, aspect])
+  }, [getRect, onSelectSegment, onUpdateSegment, canvas, aspect, currentTimeSec])
 
   // ── scale drag ─────────────────────────────────────────────────────────────
 
@@ -368,7 +371,10 @@ export default function Canvas({
   const startCropPanDrag = useCallback((e: React.MouseEvent, seg: VideoSegment) => {
     e.stopPropagation()
     e.preventDefault()
-    const clipScale = seg.clipScale ?? 1
+    // Use interpolated scale for accurate crop panning
+    const segStartSec = seg.startUs / 1e6
+    const timeWithinSegMs = (currentTimeSec - segStartSec) * 1000
+    const clipScale = getInterpolatedScale(seg, timeWithinSegMs)
     const srcW = seg.sourceWidth ?? canvas.width
     const srcH = seg.sourceHeight ?? canvas.height
     const innerHPx = clipScale * previewH
@@ -426,7 +432,7 @@ export default function Canvas({
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
-  }, [getRect, onUpdateSegment, canvas, previewH])
+  }, [getRect, onUpdateSegment, canvas, previewH, currentTimeSec])
 
   // ── render a video segment ─────────────────────────────────────────────────
 

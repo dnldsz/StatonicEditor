@@ -105,6 +105,8 @@ function startLoadProjectWatcher(): void {
             if (existsSync(loadRequest.projectPath)) {
               const project = JSON.parse(readFileSync(loadRequest.projectPath, 'utf-8'))
               mainWin?.webContents.send('load-project-request', { project, path: loadRequest.projectPath })
+              // Start watching this project file for changes (e.g., from MCP edits)
+              watchProjectFile(loadRequest.projectPath)
             }
           }
         } catch (err) {
@@ -144,9 +146,6 @@ function createWindow(): BrowserWindow {
   win.webContents.on('will-navigate', (event) => {
     event.preventDefault()
   })
-
-  // Open DevTools
-  win.webContents.openDevTools()
 
   return win
 }
@@ -413,61 +412,36 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
     const baseScale = seg.clipScale ?? 1
     const kfs = seg.scaleKeyframes
 
+    // Calculate static scale dimensions
+    const srcW = seg.sourceWidth ?? canvas.width
+    const srcH = seg.sourceHeight ?? canvas.height
+    const cropL = seg.cropLeft ?? 0, cropR = seg.cropRight ?? 0
+    const cropT = seg.cropTop ?? 0, cropB = seg.cropBottom ?? 0
+    const cW = Math.max(0.01, 1 - cropL - cropR)
+    const cH = Math.max(0.01, 1 - cropT - cropB)
+
     if (!kfs || kfs.length === 0) {
       // No keyframes - use static scale
       const fullH = Math.round(baseScale * canvas.height / 2) * 2
-      const srcW = seg.sourceWidth ?? canvas.width
-      const srcH = seg.sourceHeight ?? canvas.height
       const fullW = Math.round((srcW / srcH) * fullH / 2) * 2
-      const cropL = seg.cropLeft ?? 0, cropR = seg.cropRight ?? 0
-      const cropT = seg.cropTop ?? 0, cropB = seg.cropBottom ?? 0
-      const cW = Math.max(0.01, 1 - cropL - cropR)
-      const cH = Math.max(0.01, 1 - cropT - cropB)
       const visW = Math.max(2, Math.round(fullW * cW / 2) * 2)
       const visH = Math.max(2, Math.round(fullH * cH / 2) * 2)
       return `scale=${visW}:${visH}:force_original_aspect_ratio=disable`
     }
 
-    // Has keyframes - use animated scale expression
+    // Has keyframes - use zoompan filter for proper animation
+    // For now, use average scale to get exports working
+    // TODO: Implement proper zoompan or frame-by-frame scaling
     const sorted = [...kfs].sort((a: any, b: any) => a.timeMs - b.timeMs)
-    const srcW = seg.sourceWidth ?? canvas.width
-    const srcH = seg.sourceHeight ?? canvas.height
-    const cropL = seg.cropLeft ?? 0, cropR = seg.cropRight ?? 0
-    const cW = Math.max(0.01, 1 - cropL - cropR)
+    const avgScale = sorted.reduce((sum: number, kf: any) => sum + kf.scale, 0) / sorted.length
+    const fullH = Math.round(avgScale * canvas.height / 2) * 2
+    const fullW = Math.round((srcW / srcH) * fullH / 2) * 2
+    const visW = Math.max(2, Math.round(fullW * cW / 2) * 2)
+    const visH = Math.max(2, Math.round(fullH * cH / 2) * 2)
 
-    // Build piecewise linear interpolation expression
-    let scaleExpr = ''
-    for (let j = 0; j < sorted.length - 1; j++) {
-      const k1 = sorted[j]
-      const k2 = sorted[j + 1]
-      const t1 = outStart + k1.timeMs / 1000
-      const t2 = outStart + k2.timeMs / 1000
-      const scale1H = Math.round(k1.scale * canvas.height / 2) * 2
-      const scale2H = Math.round(k2.scale * canvas.height / 2) * 2
-      const scale1W = Math.max(2, Math.round((srcW / srcH) * scale1H * cW / 2) * 2)
-      const scale2W = Math.max(2, Math.round((srcW / srcH) * scale2H * cW / 2) * 2)
-
-      if (scaleExpr) scaleExpr += '*'
-      scaleExpr += `if(between(t,${t1},${t2}),${scale1W}+(${scale2W}-${scale1W})*(t-${t1})/(${t2}-${t1}),1)`
-    }
-
-    // Before first keyframe and after last keyframe
-    const firstScale = sorted[0].scale
-    const lastScale = sorted[sorted.length - 1].scale
-    const firstH = Math.round(firstScale * canvas.height / 2) * 2
-    const lastH = Math.round(lastScale * canvas.height / 2) * 2
-    const firstW = Math.max(2, Math.round((srcW / srcH) * firstH * cW / 2) * 2)
-    const lastW = Math.max(2, Math.round((srcW / srcH) * lastH * cW / 2) * 2)
-    const firstTime = outStart + sorted[0].timeMs / 1000
-    const lastTime = outStart + sorted[sorted.length - 1].timeMs / 1000
-
-    const widthExpr = `if(lt(t,${firstTime}),${firstW},if(gt(t,${lastTime}),${lastW},${scaleExpr}))`
-    const heightExpr = widthExpr.replace(new RegExp(String.raw`\d+`, 'g'), (match) => {
-      // Scale height proportionally (this is a simplification)
-      return match
-    })
-
-    return `scale='${widthExpr}':'trunc(${widthExpr}*ih/iw/2)*2':force_original_aspect_ratio=disable`
+    // Use static scale for now - animated zoom will require zoompan filter
+    console.warn(`[Export] Keyframe animation not yet supported in export - using average scale ${avgScale.toFixed(2)}`)
+    return `scale=${visW}:${visH}:force_original_aspect_ratio=disable`
   }
 
   // Step 1: crop each segment, scale to display size, and shift PTS to output timeline position

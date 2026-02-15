@@ -833,7 +833,14 @@ export default function App(): JSX.Element {
   const [reloadToast, setReloadToast] = useState(false)
   useEffect(() => {
     const unsub = window.api.onProjectFileChanged((project) => {
+      // Preserve playhead position and selection when reloading from file
+      const currentTime = stateRef.current.currentTimeSec
+      const currentSelection = stateRef.current.selectedId
       dispatch({ type: 'SET_PROJECT', project })
+      dispatch({ type: 'SET_TIME', t: currentTime })
+      if (currentSelection) {
+        dispatch({ type: 'SET_SELECTED', id: currentSelection })
+      }
       setReloadToast(true)
       setTimeout(() => setReloadToast(false), 2000)
     })
