@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useReducer, useRef } from 'react'
-import { Project, AppState, Action, VideoSegment, TextSegment, Track, Segment } from './types'
+import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react'
+import { Project, AppState, Action, VideoSegment, TextSegment, Track, Segment, BatchProject, LibraryClip, Account } from './types'
 import Toolbar from './components/Toolbar'
 import Canvas from './components/Canvas'
 import Timeline from './components/Timeline'
 import PropertiesPanel from './components/PropertiesPanel'
+import ClipLibrary from './components/ClipLibrary'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -15,6 +16,13 @@ function formatTimestamp(sec: number): string {
   const m = Math.floor(sec / 60)
   const s = sec % 60
   return `${m}:${s.toFixed(1).padStart(4, '0')}`
+}
+
+function pathToFileUrl(path: string): string {
+  // URL-encode each path segment to match browser normalization
+  const parts = path.split('/')
+  const encoded = parts.map(part => encodeURIComponent(part)).join('/')
+  return `file://${encoded}`
 }
 
 function getActiveVideoSegment(project: Project, timeSec: number): VideoSegment | null {
@@ -48,7 +56,11 @@ const defaultProject: Project = {
 }
 
 const initialState: AppState = {
+  mode: 'single',
   project: defaultProject,
+  batchFolder: null,
+  batchProjects: [],
+  batchSelectedIdx: 0,
   past: [],
   future: [],
   clipboard: null,
@@ -56,7 +68,9 @@ const initialState: AppState = {
   selectedId: null,
   croppingId: null,
   zoom: 100,
-  isPlaying: false
+  isPlaying: false,
+  currentAccountId: null,
+  accounts: []
 }
 
 // ── packBaseTrack: sort + close gaps in the base track, shift linked overlays ──
@@ -254,6 +268,64 @@ function reducer(state: AppState, action: Action): AppState {
     return { ...state, project: action.project, past: [], future: [], currentTimeSec: 0, selectedId: null }
   }
 
+  // batch mode
+  if (action.type === 'SET_BATCH') {
+    const firstProject = action.projects[0]?.project ?? defaultProject
+    return {
+      ...state,
+      mode: 'batch',
+      batchFolder: action.folderPath,
+      batchProjects: action.projects,
+      batchSelectedIdx: 0,
+      project: firstProject,
+      past: [],
+      future: [],
+      currentTimeSec: 0,
+      selectedId: null
+    }
+  }
+
+  if (action.type === 'SELECT_BATCH_PROJECT') {
+    const selected = state.batchProjects[action.idx]
+    if (!selected) return state
+    return {
+      ...state,
+      batchSelectedIdx: action.idx,
+      project: selected.project,
+      past: [],
+      future: [],
+      currentTimeSec: 0,
+      selectedId: null
+    }
+  }
+
+  if (action.type === 'UPDATE_BATCH_THUMBNAIL') {
+    const projects = state.batchProjects.map((p) =>
+      p.name === action.filename.replace('.json', '') ? { ...p, thumbnail: action.thumbnail } : p
+    )
+    return { ...state, batchProjects: projects }
+  }
+
+  if (action.type === 'UPDATE_BATCH_PROJECT') {
+    const filename = action.filename.replace('.json', '')
+    const projects = state.batchProjects.map((p) =>
+      p.name === filename ? { ...p, project: action.project } : p
+    )
+    const selected = state.batchProjects[state.batchSelectedIdx]
+    const updatedProject = selected && selected.name === filename ? action.project : state.project
+    return { ...state, batchProjects: projects, project: updatedProject }
+  }
+
+  if (action.type === 'EXIT_BATCH') {
+    return {
+      ...state,
+      mode: 'single',
+      batchFolder: null,
+      batchProjects: [],
+      batchSelectedIdx: 0
+    }
+  }
+
   // pack base track — no history (triggered on drag end)
   if (action.type === 'PACK_BASE_TRACK') {
     return { ...state, project: packBaseTrack(state.project) }
@@ -278,6 +350,9 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_CROPPING':  return { ...state, croppingId: action.id }
     case 'SET_ZOOM':      return { ...state, zoom: Math.min(500, Math.max(20, action.zoom)) }
     case 'SET_CLIPBOARD': return { ...state, clipboard: action.segment }
+    case 'SET_ACCOUNTS':  return { ...state, accounts: action.accounts }
+    case 'SET_CURRENT_ACCOUNT': return { ...state, currentAccountId: action.accountId }
+    case 'ADD_ACCOUNT':   return { ...state, accounts: [...state.accounts, action.account], currentAccountId: action.account.id }
   }
 
   // undoable project mutations
@@ -301,11 +376,19 @@ declare global {
       getPathForFile: (file: File) => string
       openVideo: () => Promise<{ path: string; name: string; durationSec: number; width: number; height: number } | null>
       getVideoInfo: (filePath: string) => Promise<{ path: string; name: string; durationSec: number; width: number; height: number }>
-      saveProject: (project: Project) => Promise<{ ok?: boolean; cancelled?: boolean; error?: string }>
+      saveProject: (project: Project) => Promise<{ ok?: boolean; cancelled?: boolean; error?: string; filePath?: string }>
       loadProject: () => Promise<Project | { error: string } | null>
+      openFolder: () => Promise<{ folderPath: string; projects: Array<{ name: string; path: string; project: Project }> } | null>
+      renderThumbnail: (projectPath: string, timeSec?: number) => Promise<string | null>
       saveTempPng: (dataUrl: string, filename: string) => Promise<string>
       exportVideo: (project: Project, textOverlays: Array<{ path: string; startSec: number; endSec: number }>) => Promise<{ ok?: boolean; cancelled?: boolean; error?: string }>
       onExportProgress: (cb: (line: string) => void) => () => void
+      onProjectFileChanged: (cb: (project: Project) => void) => () => void
+      onBatchFileChanged: (cb: (data: { filename: string; project: Project }) => void) => () => void
+      importClip: (sourcePath: string) => Promise<{ ok?: boolean; clip?: LibraryClip; error?: string }>
+      getClipLibrary: () => Promise<LibraryClip[]>
+      deleteClipFromLibrary: (clipId: string) => Promise<{ ok?: boolean; error?: string }>
+      updateClipMetadata: (clipId: string, updates: Partial<LibraryClip>) => Promise<{ ok?: boolean; clip?: LibraryClip; error?: string }>
     }
   }
 }
@@ -358,14 +441,14 @@ export default function App(): JSX.Element {
   const stateRef = useRef(state)
   stateRef.current = state
 
-  const { project, currentTimeSec, selectedId, croppingId, zoom, isPlaying, past, future } = state
+  const { project, currentTimeSec, selectedId, croppingId, zoom, isPlaying, past, future, accounts, currentAccountId } = state
 
   // ── seek logic ──────────────────────────────────────────────────────────────
 
   const seekTo = useCallback((t: number) => {
     const clip = getActiveVideoSegment(project, t)
     if (clip && videoRef.current) {
-      const videoSrc = `file://${clip.src}`
+      const videoSrc = pathToFileUrl(clip.src)
       if (videoRef.current.src !== videoSrc) videoRef.current.src = videoSrc
       videoRef.current.currentTime = clip.sourceStartUs / 1e6 + (t - clip.startUs / 1e6)
     } else if (videoRef.current) {
@@ -396,7 +479,7 @@ export default function App(): JSX.Element {
       dispatch({ type: 'SET_TIME', t })
       const clip = getActiveVideoSegment(project, t)
       if (clip && videoRef.current) {
-        const videoSrc = `file://${clip.src}`
+        const videoSrc = pathToFileUrl(clip.src)
         if (videoRef.current.src !== videoSrc) {
           videoRef.current.src = videoSrc
           videoRef.current.play().catch(() => {})
@@ -425,7 +508,7 @@ export default function App(): JSX.Element {
       playStartRef.current = { wallTime: performance.now(), timelineSec: currentTimeSec }
       const clip = getActiveVideoSegment(project, currentTimeSec)
       if (clip && videoRef.current) {
-        const videoSrc = `file://${clip.src}`
+        const videoSrc = pathToFileUrl(clip.src)
         if (videoRef.current.src !== videoSrc) videoRef.current.src = videoSrc
         videoRef.current.currentTime = clip.sourceStartUs / 1e6 + (currentTimeSec - clip.startUs / 1e6)
         videoRef.current.play().catch(() => {})
@@ -436,6 +519,17 @@ export default function App(): JSX.Element {
   }, [isPlaying, currentTimeSec, project, startRaf, stopRaf])
 
   useEffect(() => () => stopRaf(), [stopRaf])
+
+  // ── Hard-coded accounts ──────────────────────────────────────────────────
+
+  useEffect(() => {
+    const hardCodedAccounts: Account[] = [
+      { id: 'daniel', name: 'Daniel', created: new Date().toISOString() },
+      { id: 'stacy', name: 'Stacy', created: new Date().toISOString() }
+    ]
+    dispatch({ type: 'SET_ACCOUNTS', accounts: hardCodedAccounts })
+    dispatch({ type: 'SET_CURRENT_ACCOUNT', accountId: 'daniel' })
+  }, [])
 
   // Apply pending video src once the <video> element mounts (after first clip is added)
   useEffect(() => {
@@ -521,9 +615,23 @@ export default function App(): JSX.Element {
         return
       }
 
-      // Arrow keys — frame step
-      if (e.key === 'ArrowLeft')  { e.preventDefault(); seekTo(Math.max(0, currentTimeSec - 1 / 30)); return }
-      if (e.key === 'ArrowRight') { e.preventDefault(); seekTo(currentTimeSec + 1 / 30); return }
+      // Arrow keys — frame step (or batch navigation in batch mode)
+      const { mode, batchProjects, batchSelectedIdx } = stateRef.current
+      if (mode === 'batch' && batchProjects.length > 0) {
+        if (e.key === 'ArrowLeft' && batchSelectedIdx > 0) {
+          e.preventDefault()
+          dispatch({ type: 'SELECT_BATCH_PROJECT', idx: batchSelectedIdx - 1 })
+          return
+        }
+        if (e.key === 'ArrowRight' && batchSelectedIdx < batchProjects.length - 1) {
+          e.preventDefault()
+          dispatch({ type: 'SELECT_BATCH_PROJECT', idx: batchSelectedIdx + 1 })
+          return
+        }
+      } else {
+        if (e.key === 'ArrowLeft')  { e.preventDefault(); seekTo(Math.max(0, currentTimeSec - 1 / 30)); return }
+        if (e.key === 'ArrowRight') { e.preventDefault(); seekTo(currentTimeSec + 1 / 30); return }
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -541,6 +649,25 @@ export default function App(): JSX.Element {
     if (!result) return
     if ('error' in result) { alert(`Error: ${result.error}`); return }
     dispatch({ type: 'SET_PROJECT', project: result as Project })
+    dispatch({ type: 'EXIT_BATCH' })
+  }, [])
+
+  const handleOpenFolder = useCallback(async () => {
+    const result = await window.api.openFolder()
+    if (!result) return
+    const batchProjects: BatchProject[] = result.projects.map((p) => ({
+      name: p.name,
+      path: p.path,
+      project: p.project,
+      thumbnail: null
+    }))
+    dispatch({ type: 'SET_BATCH', folderPath: result.folderPath, projects: batchProjects })
+    // Render thumbnails in background
+    for (const bp of batchProjects) {
+      window.api.renderThumbnail(bp.path, 0.5).then((thumb) => {
+        if (thumb) dispatch({ type: 'UPDATE_BATCH_THUMBNAIL', filename: bp.name, thumbnail: thumb })
+      })
+    }
   }, [])
 
   const handleSaveProject = useCallback(async () => {
@@ -571,7 +698,7 @@ export default function App(): JSX.Element {
     dispatch({ type: 'SET_SELECTED', id: seg.id })
     dispatch({ type: 'SET_TIME', t: startUs / 1e6 })
     // Queue src/time — applied after render once the <video> element mounts
-    pendingVideoSyncRef.current = { src: `file://${info.path}`, time: 0 }
+    pendingVideoSyncRef.current = { src: pathToFileUrl(info.path), time: 0 }
   }, [project])
 
   const handleAddText = useCallback(() => {
@@ -638,7 +765,7 @@ export default function App(): JSX.Element {
     dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: seg })
     dispatch({ type: 'SET_SELECTED', id: seg.id })
     dispatch({ type: 'SET_TIME', t: startUs / 1e6 })
-    pendingVideoSyncRef.current = { src: `file://${info.path}`, time: 0 }
+    pendingVideoSyncRef.current = { src: pathToFileUrl(info.path), time: 0 }
   }, [project])
 
   const handleDropVideoRef = useRef(handleDropVideo)
@@ -648,6 +775,64 @@ export default function App(): JSX.Element {
     window.addEventListener('video-file-dropped', handler)
     return () => window.removeEventListener('video-file-dropped', handler)
   }, [])
+
+  const handleDropLibraryClip = useCallback((clip: LibraryClip, timeUs: number) => {
+    const durationUs = Math.round(clip.duration * 1e6)
+    const timeSec = timeUs / 1e6
+    const seg: VideoSegment = {
+      id: uid(),
+      type: 'video',
+      src: clip.path,
+      name: clip.name,
+      startUs: timeUs,
+      durationUs,
+      sourceStartUs: 0,
+      sourceDurationUs: durationUs,
+      fileDurationUs: durationUs,
+      sourceWidth: clip.width,
+      sourceHeight: clip.height,
+      clipX: 0,
+      clipY: 0,
+      clipScale: 1,
+      cropLeft: 0,
+      cropRight: 0,
+      cropTop: 0,
+      cropBottom: 0,
+    }
+    dispatch({ type: 'ADD_VIDEO_SEGMENT', segment: seg })
+    dispatch({ type: 'SET_SELECTED', id: seg.id })
+    dispatch({ type: 'SET_TIME', t: timeSec })
+    pendingVideoSyncRef.current = { src: pathToFileUrl(clip.path), time: 0 }
+  }, [project])
+
+  // ── hot-reload: apply external file changes (e.g. from MCP / Claude) ───────
+
+  const [reloadToast, setReloadToast] = useState(false)
+  useEffect(() => {
+    const unsub = window.api.onProjectFileChanged((project) => {
+      dispatch({ type: 'SET_PROJECT', project })
+      setReloadToast(true)
+      setTimeout(() => setReloadToast(false), 2000)
+    })
+    return unsub
+  }, [])
+
+  // batch mode hot-reload
+  useEffect(() => {
+    const unsub = window.api.onBatchFileChanged((data) => {
+      dispatch({ type: 'UPDATE_BATCH_PROJECT', filename: data.filename, project: data.project })
+      // Re-render thumbnail
+      const bp = state.batchProjects.find((p) => p.name === data.filename.replace('.json', ''))
+      if (bp) {
+        window.api.renderThumbnail(bp.path, 0.5).then((thumb) => {
+          if (thumb) dispatch({ type: 'UPDATE_BATCH_THUMBNAIL', filename: data.filename, thumbnail: thumb })
+        })
+      }
+      setReloadToast(true)
+      setTimeout(() => setReloadToast(false), 2000)
+    })
+    return unsub
+  }, [state.batchProjects])
 
   // ── duplicate segment (from timeline alt+drag) ──────────────────────────────
 
@@ -680,14 +865,42 @@ export default function App(): JSX.Element {
     ? project.tracks.flatMap((t) => t.segments).find((s) => s.id === selectedId) ?? null
     : null
 
+  // ── clip library ────────────────────────────────────────────────────────────
+
+  const [showClipLibrary, setShowClipLibrary] = useState(true)
+
+  const handleSelectClip = useCallback(async (clip: LibraryClip) => {
+    // Preview clip in canvas or add to timeline
+    // For now, just log it - we'll implement add to timeline next
+    console.log('Selected clip:', clip)
+  }, [])
+
+  // ── accounts ────────────────────────────────────────────────────────────────
+
+  const handleSelectAccount = useCallback((accountId: string) => {
+    dispatch({ type: 'SET_CURRENT_ACCOUNT', accountId })
+  }, [])
+
   // ── render ──────────────────────────────────────────────────────────────────
 
   return (
     <div className="app-root">
+      {reloadToast && (
+        <div style={{
+          position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+          background: '#1e1e1e', border: '1px solid #333', color: '#aaa',
+          fontSize: 12, padding: '6px 14px', borderRadius: 6,
+          pointerEvents: 'none', zIndex: 9999,
+          animation: 'fadeInOut 2s ease forwards',
+        }}>
+          Reloaded from file
+        </div>
+      )}
       <Toolbar
         onNew={handleNewProject}
         onOpen={handleOpenProject}
         onSave={handleSaveProject}
+        onOpenFolder={handleOpenFolder}
         onAddVideo={handleAddVideo}
         onAddText={handleAddText}
         zoom={zoom}
@@ -699,10 +912,52 @@ export default function App(): JSX.Element {
         canRedo={future.length > 0}
         onUndo={() => dispatch({ type: 'UNDO' })}
         onRedo={() => dispatch({ type: 'REDO' })}
+        mode={state.mode}
+        onExitBatch={() => dispatch({ type: 'EXIT_BATCH' })}
+        accounts={accounts}
+        currentAccountId={currentAccountId}
+        onSelectAccount={handleSelectAccount}
       />
 
+      {/* Batch mode thumbnail grid */}
+      {state.mode === 'batch' && state.batchProjects.length > 0 && (
+        <div className="batch-grid">
+          <div className="batch-header">
+            <span className="batch-title">{state.batchFolder?.split('/').pop()} ({state.batchProjects.length} variations)</span>
+          </div>
+          <div className="batch-thumbnails">
+            {state.batchProjects.map((bp, idx) => (
+              <div
+                key={bp.name}
+                className={`batch-thumb ${idx === state.batchSelectedIdx ? 'selected' : ''}`}
+                onClick={() => dispatch({ type: 'SELECT_BATCH_PROJECT', idx })}
+              >
+                {bp.thumbnail ? (
+                  <img src={`data:image/jpeg;base64,${bp.thumbnail}`} alt={bp.name} />
+                ) : (
+                  <div className="batch-thumb-loading">Loading...</div>
+                )}
+                <div className="batch-thumb-label">{bp.name}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="app-body">
-        <div className="canvas-area">
+        {showClipLibrary && (
+          <div className="clip-library-panel">
+            <ClipLibrary
+              onSelectClip={handleSelectClip}
+              currentAccountId={currentAccountId}
+            />
+          </div>
+        )}
+
+        <div
+          className="canvas-area"
+          onDoubleClick={() => { if (croppingId) dispatch({ type: 'SET_CROPPING', id: null }) }}
+        >
           <div className="canvas-center">
             <Canvas
               project={project}
@@ -766,6 +1021,7 @@ export default function App(): JSX.Element {
           onUpdateSegment={(id, patch) => dispatch({ type: 'MOVE_SEGMENT', id, patch: patch as any })}
           onDuplicateSegment={handleDuplicateSegment}
           onDropVideo={handleDropVideo}
+          onDropLibraryClip={handleDropLibraryClip}
           onZoomChange={(z) => dispatch({ type: 'SET_ZOOM', zoom: z })}
           onMoveSegmentToNewTrack={handleMoveSegmentToNewTrack}
           onMoveSegmentBetweenTracks={handleMoveSegmentBetweenTracks}

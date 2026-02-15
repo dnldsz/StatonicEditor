@@ -52,8 +52,47 @@ export interface Project {
   tracks: Track[]
 }
 
-export interface AppState {
+export interface BatchProject {
+  name: string
+  path: string
   project: Project
+  thumbnail: string | null  // base64 JPEG
+}
+
+export interface Account {
+  id: string
+  name: string
+  created: string
+}
+
+export interface LibraryClip {
+  id: string
+  accountId: string  // which account owns this clip
+  name: string
+  path: string
+  originalPath: string
+  duration: number
+  width: number
+  height: number
+  thumbnail: string
+  imported: string
+  analyzed: boolean
+  category: string
+  // Optional analysis fields (from MCP)
+  description?: string
+  tags?: string[]
+  mood?: string
+  subject_visible?: boolean
+  subject_position?: string
+  setting?: string
+}
+
+export interface AppState {
+  mode: 'single' | 'batch'
+  project: Project
+  batchFolder: string | null
+  batchProjects: BatchProject[]
+  batchSelectedIdx: number
   past: Project[]
   future: Project[]
   clipboard: Segment | null
@@ -62,6 +101,8 @@ export interface AppState {
   croppingId: string | null
   zoom: number
   isPlaying: boolean
+  currentAccountId: string | null
+  accounts: Account[]
 }
 
 export type Action =
@@ -77,6 +118,16 @@ export type Action =
   | { type: 'REDO' }
   // ── project load ─────────────────────────────────────────────────────────
   | { type: 'SET_PROJECT'; project: Project }
+  // ── batch mode ───────────────────────────────────────────────────────────
+  | { type: 'SET_BATCH'; folderPath: string; projects: BatchProject[] }
+  | { type: 'SELECT_BATCH_PROJECT'; idx: number }
+  | { type: 'UPDATE_BATCH_THUMBNAIL'; filename: string; thumbnail: string }
+  | { type: 'UPDATE_BATCH_PROJECT'; filename: string; project: Project }
+  | { type: 'EXIT_BATCH' }
+  // ── accounts ─────────────────────────────────────────────────────────────
+  | { type: 'SET_ACCOUNTS'; accounts: Account[] }
+  | { type: 'SET_CURRENT_ACCOUNT'; accountId: string | null }
+  | { type: 'ADD_ACCOUNT'; account: Account }
   // ── undoable mutations ───────────────────────────────────────────────────
   | { type: 'ADD_VIDEO_SEGMENT'; segment: VideoSegment }
   | { type: 'ADD_TEXT_WITH_TRACK'; track: Track; segment: TextSegment }

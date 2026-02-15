@@ -1,10 +1,13 @@
 import React from 'react'
+import { Account } from '../types'
+import AccountDropdown from './AccountDropdown'
 
 interface ToolbarProps {
   projectName: string
   onRenameProject: (name: string) => void
   onNew: () => void
   onOpen: () => void
+  onOpenFolder: () => void
   onSave: () => void
   onAddVideo: () => void
   onAddText: () => void
@@ -15,17 +18,24 @@ interface ToolbarProps {
   zoom: number
   onZoomChange: (zoom: number) => void
   onExport: () => void
+  mode: 'single' | 'batch'
+  onExitBatch: () => void
+  accounts: Account[]
+  currentAccountId: string | null
+  onSelectAccount: (accountId: string) => void
 }
 
 const ZOOM_STEPS = [20, 30, 50, 75, 100, 150, 200, 300, 500]
 
 export default function Toolbar({
   projectName, onRenameProject,
-  onNew, onOpen, onSave,
+  onNew, onOpen, onOpenFolder, onSave,
   onAddVideo, onAddText,
   canUndo, canRedo, onUndo, onRedo,
   zoom, onZoomChange,
-  onExport
+  onExport,
+  mode, onExitBatch,
+  accounts, currentAccountId, onSelectAccount
 }: ToolbarProps): JSX.Element {
   const zoomIn  = () => { const next = ZOOM_STEPS.find((z) => z > zoom); if (next) onZoomChange(next) }
   const zoomOut = () => { const prev = [...ZOOM_STEPS].reverse().find((z) => z < zoom); if (prev) onZoomChange(prev) }
@@ -34,11 +44,26 @@ export default function Toolbar({
     <div className="toolbar">
       <div className="toolbar-spacer" />
 
-      <div className="toolbar-group">
-        <button className="btn" onClick={onNew}  title="New project">New</button>
-        <button className="btn" onClick={onOpen} title="Open project">Open</button>
-        <button className="btn" onClick={onSave} title="Save project (⌘S)">Save</button>
-      </div>
+      <AccountDropdown
+        accounts={accounts}
+        currentAccountId={currentAccountId}
+        onSelectAccount={onSelectAccount}
+      />
+
+      <div className="toolbar-sep" />
+
+      {mode === 'batch' ? (
+        <div className="toolbar-group">
+          <button className="btn" onClick={onExitBatch} title="Exit batch mode">← Exit Batch</button>
+        </div>
+      ) : (
+        <div className="toolbar-group">
+          <button className="btn" onClick={onNew}  title="New project">New</button>
+          <button className="btn" onClick={onOpen} title="Open project">Open</button>
+          <button className="btn" onClick={onOpenFolder} title="Open batch folder">Open Folder</button>
+          <button className="btn" onClick={onSave} title="Save project (⌘S)">Save</button>
+        </div>
+      )}
 
       <div className="toolbar-sep" />
 

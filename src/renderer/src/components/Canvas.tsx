@@ -49,9 +49,22 @@ type ScaleDragState = {
   canvasW?: number; canvasH?: number
 }
 
+type SnapTarget = { val: number; line: number }  // clipX/Y value to snap to; line = CSS % for guide
+
 type MoveDragState = {
   id: string; startX: number; startY: number; origX: number; origY: number
   kind: 'text' | 'video'
+  xSnaps: SnapTarget[]
+  ySnaps: SnapTarget[]
+}
+
+type CropPanDragState = {
+  id: string
+  startX: number; startY: number
+  origClipX: number; origClipY: number
+  origCropL: number; origCropR: number
+  origCropT: number; origCropB: number
+  innerWPx: number; innerHPx: number
 }
 
 type CropHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
@@ -63,6 +76,12 @@ type CropDragState = {
   elWidth: number; elHeight: number
 }
 
+function pathToFileUrl(path: string): string {
+  const parts = path.split('/')
+  const encoded = parts.map(part => encodeURIComponent(part)).join('/')
+  return `file://${encoded}`
+}
+
 export default function Canvas({
   project, currentTimeSec, selectedId, croppingId, isPlaying,
   videoRef, onSelectSegment, onUpdateSegment, onSetCropping
@@ -71,8 +90,10 @@ export default function Canvas({
   const moveDragRef = useRef<MoveDragState | null>(null)
   const scaleDragRef = useRef<ScaleDragState | null>(null)
   const cropDragRef = useRef<CropDragState | null>(null)
+  const cropPanDragRef = useRef<CropPanDragState | null>(null)
   const overlayVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map())
-  const [snapGuide, setSnapGuide] = useState<{ x: boolean; y: boolean }>({ x: false, y: false })
+  // x/y = CSS percentage for where to draw the guide line, null = no guide
+  const [snapGuide, setSnapGuide] = useState<{ x: number | null; y: number | null }>({ x: null, y: null })
   const [previewSize, setPreviewSize] = useState({ w: 0, h: 0 })
 
   const { canvas } = project
@@ -123,7 +144,7 @@ export default function Canvas({
     for (const seg of overlayVideoSegs) {
       const el = overlayVideoRefs.current.get(seg.id)
       if (!el) continue
-      const videoSrc = `file://${seg.src}`
+      const videoSrc = pathToFileUrl(seg.src)
       const targetTime = seg.sourceStartUs / 1e6 + (currentTimeSec - seg.startUs / 1e6)
       if (el.src !== videoSrc) {
         el.src = videoSrc
@@ -151,11 +172,37 @@ export default function Canvas({
 
   const startMoveDrag = useCallback((
     e: React.MouseEvent, id: string, kind: 'text' | 'video',
-    origX: number, origY: number
+    origX: number, origY: number, seg?: VideoSegment
   ) => {
     e.stopPropagation()
     onSelectSegment(id)
-    moveDragRef.current = { id, startX: e.clientX, startY: e.clientY, origX, origY, kind }
+
+    // Build snap targets: center always included; video clips also snap to canvas edges
+    let xSnaps: SnapTarget[] = [{ val: 0, line: 50 }]
+    let ySnaps: SnapTarget[] = [{ val: 0, line: 50 }]
+    if (kind === 'video' && seg) {
+      const clipScale = seg.clipScale ?? 1
+      const srcW = seg.sourceWidth ?? canvas.width
+      const srcH = seg.sourceHeight ?? canvas.height
+      const cropL = seg.cropLeft ?? 0, cropR = seg.cropRight ?? 0
+      const cropT = seg.cropTop ?? 0, cropB = seg.cropBottom ?? 0
+      // Full frame size in canvas units (canvas spans 2 units wide/tall)
+      const fullH_norm = clipScale * 2
+      const fullW_norm = (srcW / srcH) * fullH_norm / aspect
+      // clipX/Y values where the visible (cropped) area edge aligns with the canvas edge
+      xSnaps = [
+        { val: 0,                                        line: 50  },
+        { val: -1 + fullW_norm * (0.5 - cropL),         line: 0   },  // visible left = canvas left
+        { val:  1 + fullW_norm * (cropR - 0.5),         line: 100 },  // visible right = canvas right
+      ]
+      ySnaps = [
+        { val: 0,                                        line: 50  },
+        { val:  1 + fullH_norm * (cropT - 0.5),         line: 0   },  // visible top = canvas top
+        { val: -1 + fullH_norm * (0.5 - cropB),         line: 100 },  // visible bottom = canvas bottom
+      ]
+    }
+
+    moveDragRef.current = { id, startX: e.clientX, startY: e.clientY, origX, origY, kind, xSnaps, ySnaps }
 
     const onMove = (me: MouseEvent) => {
       const drag = moveDragRef.current
@@ -173,26 +220,30 @@ export default function Canvas({
         const snapY = Math.abs(newY) < SNAP_THRESHOLD
         if (snapX) newX = 0
         if (snapY) newY = 0
-        setSnapGuide({ x: snapX, y: snapY })
+        setSnapGuide({ x: snapX ? 50 : null, y: snapY ? 50 : null })
         onUpdateSegment(id, { x: newX, y: newY } as Partial<TextSegment>)
       } else {
-        const snapX = Math.abs(newX) < SNAP_THRESHOLD
-        const snapY = Math.abs(newY) < SNAP_THRESHOLD
-        if (snapX) newX = 0
-        if (snapY) newY = 0
-        setSnapGuide({ x: snapX, y: snapY })
+        let snapXLine: number | null = null
+        let snapYLine: number | null = null
+        for (const s of drag.xSnaps) {
+          if (Math.abs(newX - s.val) < SNAP_THRESHOLD) { newX = s.val; snapXLine = s.line; break }
+        }
+        for (const s of drag.ySnaps) {
+          if (Math.abs(newY - s.val) < SNAP_THRESHOLD) { newY = s.val; snapYLine = s.line; break }
+        }
+        setSnapGuide({ x: snapXLine, y: snapYLine })
         onUpdateSegment(id, { clipX: newX, clipY: newY } as Partial<VideoSegment>)
       }
     }
     const onUp = () => {
       moveDragRef.current = null
-      setSnapGuide({ x: false, y: false })
+      setSnapGuide({ x: null, y: null })
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
-  }, [getRect, onSelectSegment, onUpdateSegment])
+  }, [getRect, onSelectSegment, onUpdateSegment, canvas, aspect])
 
   // ── scale drag ─────────────────────────────────────────────────────────────
 
@@ -294,6 +345,71 @@ export default function Canvas({
     window.addEventListener('mouseup', onUp)
   }, [onUpdateSegment])
 
+  // ── crop pan drag: move source content within crop window ──────────────────
+
+  const startCropPanDrag = useCallback((e: React.MouseEvent, seg: VideoSegment) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const clipScale = seg.clipScale ?? 1
+    const srcW = seg.sourceWidth ?? canvas.width
+    const srcH = seg.sourceHeight ?? canvas.height
+    const innerHPx = clipScale * previewH
+    const innerWPx = (srcW / srcH) * innerHPx
+    cropPanDragRef.current = {
+      id: seg.id,
+      startX: e.clientX, startY: e.clientY,
+      origClipX: seg.clipX ?? 0, origClipY: seg.clipY ?? 0,
+      origCropL: seg.cropLeft ?? 0, origCropR: seg.cropRight ?? 0,
+      origCropT: seg.cropTop ?? 0, origCropB: seg.cropBottom ?? 0,
+      innerWPx, innerHPx,
+    }
+    const onMove = (me: MouseEvent) => {
+      const drag = cropPanDragRef.current
+      if (!drag) return
+      const rect = getRect()
+      if (!rect) return
+      // Raw pixel delta → crop-fraction delta
+      const rawDX = (me.clientX - drag.startX) / drag.innerWPx
+      const rawDY = (me.clientY - drag.startY) / drag.innerHPx
+      // Clamp so crop fractions stay ≥ 0 (can't pan past the source edge)
+      const dX = Math.max(-drag.origCropR, Math.min(drag.origCropL, rawDX))
+      const dY = Math.max(-drag.origCropB, Math.min(drag.origCropT, rawDY))
+      let newCropL = drag.origCropL - dX
+      let newCropR = drag.origCropR + dX
+      let newCropT = drag.origCropT - dY
+      let newCropB = drag.origCropB + dY
+      // Snap: source centered in crop frame (cropL≈cropR or cropT≈cropB)
+      let snapXLine: number | null = null
+      let snapYLine: number | null = null
+      if (Math.abs(newCropL - newCropR) < SNAP_THRESHOLD / 4) {
+        const mean = (newCropL + newCropR) / 2
+        newCropL = mean; newCropR = mean; snapXLine = 50
+      }
+      if (Math.abs(newCropT - newCropB) < SNAP_THRESHOLD / 4) {
+        const mean = (newCropT + newCropB) / 2
+        newCropT = mean; newCropB = mean; snapYLine = 50
+      }
+      setSnapGuide({ x: snapXLine, y: snapYLine })
+      // Shift clipX/clipY so the crop window stays fixed on canvas.
+      // dX is in crop-fraction units; convert to canvas units: dX * innerWPx pixels * (2 / rect.width)
+      const clipX = drag.origClipX + dX * drag.innerWPx / rect.width * 2
+      const clipY = drag.origClipY - dY * drag.innerHPx / rect.height * 2
+      onUpdateSegment(drag.id, {
+        clipX, clipY,
+        cropLeft: newCropL, cropRight: newCropR,
+        cropTop: newCropT, cropBottom: newCropB,
+      } as Partial<VideoSegment>)
+    }
+    const onUp = () => {
+      cropPanDragRef.current = null
+      setSnapGuide({ x: null, y: null })
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [getRect, onUpdateSegment, canvas, previewH])
+
   // ── render a video segment ─────────────────────────────────────────────────
 
   const renderVideoSeg = (seg: VideoSegment, videoEl: React.ReactElement, z: number) => {
@@ -325,6 +441,13 @@ export default function Canvas({
     const innerLeft = applyC ? -cropL * innerW : 0
     const innerTop  = applyC ? -cropT * innerH : 0
 
+    // Clip footage to canvas boundary (handles are siblings so not affected)
+    const ciTop    = Math.max(0, -outerTop)
+    const ciRight  = Math.max(0, outerLeft + outerW - previewSize.w)
+    const ciBottom = Math.max(0, outerTop + outerH - previewH)
+    const ciLeft   = Math.max(0, -outerLeft)
+    const canvasClip = `inset(${ciTop}px ${ciRight}px ${ciBottom}px ${ciLeft}px)`
+
     // Crop handle positions (absolute px within outer div = full frame in crop mode)
     const cropHandlePositions: Array<{ handle: CropHandle; left: number; top: number; cursor: string }> = [
       { handle: 'nw', left: cropL * innerW,             top: cropT * innerH,             cursor: 'nw-resize' },
@@ -352,15 +475,21 @@ export default function Canvas({
           boxSizing: 'border-box',
         }}
         onMouseDown={!isCroppingThis ? (e) =>
-          startMoveDrag(e, seg.id, 'video', seg.clipX, seg.clipY) : undefined}
+          startMoveDrag(e, seg.id, 'video', seg.clipX, seg.clipY, seg) : undefined}
         onClick={(e) => { e.stopPropagation(); onSelectSegment(seg.id) }}
         onDoubleClick={(e) => {
           e.stopPropagation()
           onSetCropping(isCroppingThis ? null : seg.id)
         }}
       >
-        {/* Content div — clips the video to the crop region */}
-        <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
+        {/* Content div — clips to crop region and canvas boundary */}
+        <div
+          style={{
+            position: 'absolute', inset: 0, overflow: 'hidden', clipPath: canvasClip,
+            cursor: isCroppingThis ? 'grab' : undefined,
+          }}
+          onMouseDown={isCroppingThis ? (e) => startCropPanDrag(e, seg) : undefined}
+        >
           {/* Full-frame video div, offset to show only the crop window */}
           <div style={{
             position: 'absolute',
@@ -473,11 +602,11 @@ export default function Canvas({
       ))}
 
       {/* Snap guides */}
-      {snapGuide.x && (
-        <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, background: '#ff3b30', opacity: 0.8, transform: 'translateX(-50%)', pointerEvents: 'none', zIndex: 30 }} />
+      {snapGuide.x !== null && (
+        <div style={{ position: 'absolute', left: `${snapGuide.x}%`, top: 0, bottom: 0, width: 1, background: '#ff3b30', opacity: 0.8, transform: 'translateX(-50%)', pointerEvents: 'none', zIndex: 30 }} />
       )}
-      {snapGuide.y && (
-        <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: 1, background: '#ff3b30', opacity: 0.8, transform: 'translateY(-50%)', pointerEvents: 'none', zIndex: 30 }} />
+      {snapGuide.y !== null && (
+        <div style={{ position: 'absolute', top: `${snapGuide.y}%`, left: 0, right: 0, height: 1, background: '#ff3b30', opacity: 0.8, transform: 'translateY(-50%)', pointerEvents: 'none', zIndex: 30 }} />
       )}
 
       {!hasAnyContent && (

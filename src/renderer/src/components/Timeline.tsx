@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Project, Segment, VideoSegment } from '../types'
+import { Project, Segment, VideoSegment, LibraryClip } from '../types'
 
 const LABEL_W = 88
 const TRACK_H = 44
@@ -87,6 +87,7 @@ interface TimelineProps {
   onUpdateSegment: (id: string, patch: Partial<Segment>) => void
   onDuplicateSegment: (trackId: string, segment: Segment) => void
   onDropVideo: (filePath: string) => void
+  onDropLibraryClip: (clip: LibraryClip, timeUs: number) => void
   onZoomChange: (zoom: number) => void
   onMoveSegmentToNewTrack: (fromTrackId: string, segId: string) => void
   onMoveSegmentBetweenTracks: (fromTrackId: string, segId: string, toTrackId: string) => void
@@ -109,7 +110,7 @@ function getRulerInterval(zoom: number): { major: number; minor: number } {
 // ── Timeline ───────────────────────────────────────────────────────────────
 export default function Timeline({
   project, currentTimeSec, selectedId, zoom,
-  onSeek, onSelectSegment, onUpdateSegment, onDuplicateSegment, onDropVideo,
+  onSeek, onSelectSegment, onUpdateSegment, onDuplicateSegment, onDropVideo, onDropLibraryClip,
   onZoomChange, onMoveSegmentToNewTrack, onMoveSegmentBetweenTracks, onPackBaseTrack
 }: TimelineProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -316,7 +317,30 @@ export default function Timeline({
     const onDragLeave = (e: DragEvent) => {
       if (!el.contains(e.relatedTarget as Node)) setDropActive(false)
     }
-    const onDrop = (e: DragEvent) => { e.preventDefault(); setDropActive(false) }
+    const onDrop = (e: DragEvent) => {
+      e.preventDefault()
+      setDropActive(false)
+
+      // Check if it's a library clip
+      const clipId = e.dataTransfer?.getData('clipId')
+      const clipPath = e.dataTransfer?.getData('clipPath')
+
+      if (clipId && clipPath) {
+        // Library clip drop - calculate drop position
+        const rect = el.getBoundingClientRect()
+        const scrollLeft = el.scrollLeft
+        const rawX = e.clientX - rect.left + scrollLeft - LABEL_W
+        const timeUs = Math.max(0, Math.round((rawX / zoom) * 1e6))
+
+        // Fetch clip metadata and create segment
+        window.api.getClipLibrary().then((clips) => {
+          const clip = clips.find((c) => c.id === clipId)
+          if (clip) {
+            onDropLibraryClip(clip, timeUs)
+          }
+        })
+      }
+    }
     el.addEventListener('dragover', onDragOver)
     el.addEventListener('dragleave', onDragLeave)
     el.addEventListener('drop', onDrop)
@@ -325,7 +349,7 @@ export default function Timeline({
       el.removeEventListener('dragleave', onDragLeave)
       el.removeEventListener('drop', onDrop)
     }
-  }, [])
+  }, [zoom, onDropLibraryClip])
 
   // ── Ruler mousedown (seek) ────────────────────────────────────────────────
   const handleRulerMouseDown = (e: React.MouseEvent) => {

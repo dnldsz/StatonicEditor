@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('api', {
   openVideo: () => ipcRenderer.invoke('open-video'),
   saveProject: (project: any) => ipcRenderer.invoke('save-project', project),
   loadProject: () => ipcRenderer.invoke('load-project'),
+  openFolder: () => ipcRenderer.invoke('open-folder'),
+  renderThumbnail: (projectPath: string, timeSec?: number) => ipcRenderer.invoke('render-thumbnail', projectPath, timeSec),
   getVideoInfo: (filePath: string) => ipcRenderer.invoke('get-video-info', filePath),
   saveTempPng: (dataUrl: string, filename: string) => ipcRenderer.invoke('save-temp-png', dataUrl, filename),
   exportVideo: (project: any, textOverlays: any[]) => ipcRenderer.invoke('export-video', project, textOverlays),
@@ -14,5 +16,24 @@ contextBridge.exposeInMainWorld('api', {
     const handler = (_event: any, line: string) => cb(line)
     ipcRenderer.on('export-progress', handler)
     return () => ipcRenderer.removeListener('export-progress', handler)
-  }
+  },
+  onProjectFileChanged: (cb: (project: any) => void) => {
+    const handler = (_event: any, project: any) => cb(project)
+    ipcRenderer.on('project-file-changed', handler)
+    return () => ipcRenderer.removeListener('project-file-changed', handler)
+  },
+  onBatchFileChanged: (cb: (data: { filename: string; project: any }) => void) => {
+    const handler = (_event: any, data: { filename: string; project: any }) => cb(data)
+    ipcRenderer.on('batch-file-changed', handler)
+    return () => ipcRenderer.removeListener('batch-file-changed', handler)
+  },
+  // Clip Library
+  importClip: (sourcePath: string, accountId?: string) => ipcRenderer.invoke('import-clip', sourcePath, accountId),
+  getClipLibrary: () => ipcRenderer.invoke('get-clip-library'),
+  deleteClipFromLibrary: (clipId: string) => ipcRenderer.invoke('delete-clip-from-library', clipId),
+  updateClipMetadata: (clipId: string, updates: any) => ipcRenderer.invoke('update-clip-metadata', clipId, updates),
+  // Accounts
+  getAccounts: () => ipcRenderer.invoke('get-accounts'),
+  createAccount: (name: string) => ipcRenderer.invoke('create-account', name),
+  updateAccount: (accountId: string, updates: any) => ipcRenderer.invoke('update-account', accountId, updates)
 })

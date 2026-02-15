@@ -19,7 +19,13 @@ try {
   set('CFBundleName', 'Statonic')
   set('CFBundleDisplayName', 'Statonic')
   set('LSDisplayName', 'Statonic')
-  // Refresh the macOS dock so it picks up the new name immediately
+  // Change the bundle ID so macOS Launch Services doesn't cache the name as "Electron"
+  set('CFBundleIdentifier', 'com.statonic.app')
+  // Flush the Launch Services database so the new name/ID is picked up immediately
+  try {
+    execSync('/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -kill -r -domain local -domain system -domain user', { stdio: 'pipe' })
+  } catch {}
+  // Restart the Dock so it refreshes
   try { execSync('killall Dock', { stdio: 'pipe' }) } catch {}
   console.log('✓ Patched Electron binary name → Statonic')
 } catch (e) {
