@@ -1,5 +1,23 @@
 import React, { RefObject, useCallback, useEffect, useRef, useState } from 'react'
-import { Project, Segment, TextSegment, VideoSegment } from '../types'
+import { Project, Segment, TextSegment, VideoSegment, ScaleKeyframe } from '../types'
+
+function getInterpolatedScale(seg: VideoSegment, timeWithinSegMs: number): number {
+  if (!seg.scaleKeyframes || seg.scaleKeyframes.length === 0) {
+    return seg.clipScale
+  }
+  const kfs = [...seg.scaleKeyframes].sort((a, b) => a.timeMs - b.timeMs)
+  if (timeWithinSegMs <= kfs[0].timeMs) return kfs[0].scale
+  if (timeWithinSegMs >= kfs[kfs.length - 1].timeMs) return kfs[kfs.length - 1].scale
+  for (let i = 0; i < kfs.length - 1; i++) {
+    const k1 = kfs[i]
+    const k2 = kfs[i + 1]
+    if (timeWithinSegMs >= k1.timeMs && timeWithinSegMs <= k2.timeMs) {
+      const t = (timeWithinSegMs - k1.timeMs) / (k2.timeMs - k1.timeMs)
+      return k1.scale + (k2.scale - k1.scale) * t
+    }
+  }
+  return seg.clipScale
+}
 
 interface CanvasProps {
   project: Project
@@ -422,8 +440,13 @@ export default function Canvas({
     const cH = Math.max(0.01, 1 - cropT - cropB)
     const applyC = !isCroppingThis
 
+    // Calculate interpolated scale based on current time within segment
+    const segStartSec = seg.startUs / 1e6
+    const timeWithinSegMs = (currentTimeSec - segStartSec) * 1000
+    const currentScale = getInterpolatedScale(seg, timeWithinSegMs)
+
     // Full-frame display size (correct aspect ratio, no distortion)
-    const innerH = seg.clipScale * previewH
+    const innerH = currentScale * previewH
     const innerW = (seg.sourceWidth / seg.sourceHeight) * innerH
 
     // Center of the full frame on the canvas
@@ -635,9 +658,9 @@ export default function Canvas({
                 color: seg.color,
                 fontWeight: seg.bold ? 700 : 400,
                 fontStyle: seg.italic ? 'italic' : 'normal',
-                fontFamily: "'TikTokText', -apple-system, sans-serif",
+                fontFamily: "'TikTok Sans', -apple-system, sans-serif",
                 WebkitTextStroke: (seg.strokeEnabled ?? false)
-                  ? `${seg.fontSize * (seg.textScale ?? 1) * (6.9 / 97.0) * 2 * previewScale}px ${seg.strokeColor}`
+                  ? `${seg.fontSize * (seg.textScale ?? 1) * (6.9 / 97.0) * 2.3 * previewScale}px ${seg.strokeColor}`
                   : undefined,
                 cursor: 'move', userSelect: 'none', whiteSpace: 'pre',
                 textAlign: seg.textAlign ?? 'center', lineHeight: 1.0, padding: '2px 4px'

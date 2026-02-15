@@ -1,3 +1,8 @@
+export interface ScaleKeyframe {
+  timeMs: number  // time relative to segment start (milliseconds)
+  scale: number   // scale value at this time
+}
+
 export interface VideoSegment {
   id: string
   type: 'video'
@@ -12,7 +17,8 @@ export interface VideoSegment {
   sourceHeight: number     // intrinsic pixel height from ffprobe
   clipX: number        // canvas-space position (-1 to 1), 0 = center
   clipY: number        // canvas-space position (-1 to 1), 0 = center
-  clipScale: number    // 1.0 = fill canvas height
+  clipScale: number    // 1.0 = fill canvas height (base scale when no keyframes)
+  scaleKeyframes?: ScaleKeyframe[]  // optional scale animation keyframes
   cropLeft: number     // fraction of width to crop from left (0-1)
   cropRight: number    // fraction of width to crop from right (0-1)
   cropTop: number      // fraction of height to crop from top (0-1)
@@ -78,7 +84,7 @@ export interface LibraryClip {
   imported: string
   analyzed: boolean
   category: string
-  // Optional analysis fields (from MCP)
+  // Optional analysis fields
   description?: string
   tags?: string[]
   mood?: string

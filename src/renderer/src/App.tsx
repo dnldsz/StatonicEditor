@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react'
-import { Project, AppState, Action, VideoSegment, TextSegment, Track, Segment, BatchProject, LibraryClip, Account } from './types'
+import { Project, AppState, Action, VideoSegment, TextSegment, Track, Segment, BatchProject, LibraryClip, Account, ScaleKeyframe } from './types'
 import Toolbar from './components/Toolbar'
 import Canvas from './components/Canvas'
 import Timeline from './components/Timeline'
@@ -7,6 +7,38 @@ import PropertiesPanel from './components/PropertiesPanel'
 import ClipLibrary from './components/ClipLibrary'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+function getInterpolatedScale(seg: VideoSegment, timeWithinSegMs: number): number {
+  // If no keyframes or empty array, use static clipScale
+  if (!seg.scaleKeyframes || seg.scaleKeyframes.length === 0) {
+    return seg.clipScale
+  }
+
+  // Sort keyframes by time
+  const kfs = [...seg.scaleKeyframes].sort((a, b) => a.timeMs - b.timeMs)
+
+  // Before first keyframe
+  if (timeWithinSegMs <= kfs[0].timeMs) {
+    return kfs[0].scale
+  }
+
+  // After last keyframe
+  if (timeWithinSegMs >= kfs[kfs.length - 1].timeMs) {
+    return kfs[kfs.length - 1].scale
+  }
+
+  // Find surrounding keyframes and interpolate
+  for (let i = 0; i < kfs.length - 1; i++) {
+    const k1 = kfs[i]
+    const k2 = kfs[i + 1]
+    if (timeWithinSegMs >= k1.timeMs && timeWithinSegMs <= k2.timeMs) {
+      const t = (timeWithinSegMs - k1.timeMs) / (k2.timeMs - k1.timeMs)
+      return k1.scale + (k2.scale - k1.scale) * t
+    }
+  }
+
+  return seg.clipScale
+}
 
 function uid(): string {
   return Math.random().toString(36).slice(2, 10)
@@ -1007,6 +1039,7 @@ export default function App(): JSX.Element {
         <div className="properties-area">
           <PropertiesPanel
             segment={selectedSegment}
+            currentTimeSec={currentTimeSec}
             onUpdate={(id, patch) => dispatch({ type: 'UPDATE_SEGMENT', id, patch })}
             onDelete={(id) => {
               dispatch({ type: 'DELETE_SEGMENT', id })

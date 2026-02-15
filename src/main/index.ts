@@ -408,23 +408,77 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
 
   const filterParts: string[] = []
 
+  // Helper to generate scale expression for keyframes
+  function getScaleExpression(seg: any, outStart: number, canvas: any): string {
+    const baseScale = seg.clipScale ?? 1
+    const kfs = seg.scaleKeyframes
+
+    if (!kfs || kfs.length === 0) {
+      // No keyframes - use static scale
+      const fullH = Math.round(baseScale * canvas.height / 2) * 2
+      const srcW = seg.sourceWidth ?? canvas.width
+      const srcH = seg.sourceHeight ?? canvas.height
+      const fullW = Math.round((srcW / srcH) * fullH / 2) * 2
+      const cropL = seg.cropLeft ?? 0, cropR = seg.cropRight ?? 0
+      const cropT = seg.cropTop ?? 0, cropB = seg.cropBottom ?? 0
+      const cW = Math.max(0.01, 1 - cropL - cropR)
+      const cH = Math.max(0.01, 1 - cropT - cropB)
+      const visW = Math.max(2, Math.round(fullW * cW / 2) * 2)
+      const visH = Math.max(2, Math.round(fullH * cH / 2) * 2)
+      return `scale=${visW}:${visH}:force_original_aspect_ratio=disable`
+    }
+
+    // Has keyframes - use animated scale expression
+    const sorted = [...kfs].sort((a: any, b: any) => a.timeMs - b.timeMs)
+    const srcW = seg.sourceWidth ?? canvas.width
+    const srcH = seg.sourceHeight ?? canvas.height
+    const cropL = seg.cropLeft ?? 0, cropR = seg.cropRight ?? 0
+    const cW = Math.max(0.01, 1 - cropL - cropR)
+
+    // Build piecewise linear interpolation expression
+    let scaleExpr = ''
+    for (let j = 0; j < sorted.length - 1; j++) {
+      const k1 = sorted[j]
+      const k2 = sorted[j + 1]
+      const t1 = outStart + k1.timeMs / 1000
+      const t2 = outStart + k2.timeMs / 1000
+      const scale1H = Math.round(k1.scale * canvas.height / 2) * 2
+      const scale2H = Math.round(k2.scale * canvas.height / 2) * 2
+      const scale1W = Math.max(2, Math.round((srcW / srcH) * scale1H * cW / 2) * 2)
+      const scale2W = Math.max(2, Math.round((srcW / srcH) * scale2H * cW / 2) * 2)
+
+      if (scaleExpr) scaleExpr += '*'
+      scaleExpr += `if(between(t,${t1},${t2}),${scale1W}+(${scale2W}-${scale1W})*(t-${t1})/(${t2}-${t1}),1)`
+    }
+
+    // Before first keyframe and after last keyframe
+    const firstScale = sorted[0].scale
+    const lastScale = sorted[sorted.length - 1].scale
+    const firstH = Math.round(firstScale * canvas.height / 2) * 2
+    const lastH = Math.round(lastScale * canvas.height / 2) * 2
+    const firstW = Math.max(2, Math.round((srcW / srcH) * firstH * cW / 2) * 2)
+    const lastW = Math.max(2, Math.round((srcW / srcH) * lastH * cW / 2) * 2)
+    const firstTime = outStart + sorted[0].timeMs / 1000
+    const lastTime = outStart + sorted[sorted.length - 1].timeMs / 1000
+
+    const widthExpr = `if(lt(t,${firstTime}),${firstW},if(gt(t,${lastTime}),${lastW},${scaleExpr}))`
+    const heightExpr = widthExpr.replace(new RegExp(String.raw`\d+`, 'g'), (match) => {
+      // Scale height proportionally (this is a simplification)
+      return match
+    })
+
+    return `scale='${widthExpr}':'trunc(${widthExpr}*ih/iw/2)*2':force_original_aspect_ratio=disable`
+  }
+
   // Step 1: crop each segment, scale to display size, and shift PTS to output timeline position
   for (let i = 0; i < allVideoSegs.length; i++) {
     const { seg } = allVideoSegs[i]
-    const clipScale = seg.clipScale ?? 1
     const srcW = seg.sourceWidth ?? canvas.width
     const srcH = seg.sourceHeight ?? canvas.height
     const cropL = seg.cropLeft ?? 0, cropR = seg.cropRight ?? 0
     const cropT = seg.cropTop ?? 0, cropB = seg.cropBottom ?? 0
     const cW = Math.max(0.01, 1 - cropL - cropR)
     const cH = Math.max(0.01, 1 - cropT - cropB)
-
-    // Full frame display size
-    const fullH = Math.round(clipScale * canvas.height / 2) * 2
-    const fullW = Math.round((srcW / srcH) * fullH / 2) * 2
-    // Cropped visible size (what actually appears on canvas)
-    const visW = Math.max(2, Math.round(fullW * cW / 2) * 2)
-    const visH = Math.max(2, Math.round(fullH * cH / 2) * 2)
 
     const hasCrop = cropL > 0 || cropR > 0 || cropT > 0 || cropB > 0
     const cropFilter = hasCrop
@@ -435,8 +489,10 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
     const outStart = seg.startUs / 1e6
     const ptsShift = `setpts=PTS-STARTPTS+${outStart}/TB`
 
+    const scaleFilter = getScaleExpression(seg, outStart, canvas)
+
     filterParts.push(
-      `[${i + 1}:v]${cropFilter}scale=${visW}:${visH}:force_original_aspect_ratio=disable,fps=fps=30,${ptsShift}[sv${i}]`
+      `[${i + 1}:v]${cropFilter}${scaleFilter},fps=fps=30,${ptsShift}[sv${i}]`
     )
   }
 

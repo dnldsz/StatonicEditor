@@ -1,5 +1,20 @@
 import React, { useEffect, useState } from 'react'
-import { Segment, TextSegment, VideoSegment } from '../types'
+import { Segment, TextSegment, VideoSegment, ScaleKeyframe } from '../types'
+
+function getInterpolatedScale(seg: VideoSegment, timeWithinSegMs: number): number {
+  if (!seg.scaleKeyframes || seg.scaleKeyframes.length === 0) return seg.clipScale
+  const kfs = [...seg.scaleKeyframes].sort((a, b) => a.timeMs - b.timeMs)
+  if (timeWithinSegMs <= kfs[0].timeMs) return kfs[0].scale
+  if (timeWithinSegMs >= kfs[kfs.length - 1].timeMs) return kfs[kfs.length - 1].scale
+  for (let i = 0; i < kfs.length - 1; i++) {
+    const k1 = kfs[i], k2 = kfs[i + 1]
+    if (timeWithinSegMs >= k1.timeMs && timeWithinSegMs <= k2.timeMs) {
+      const t = (timeWithinSegMs - k1.timeMs) / (k2.timeMs - k1.timeMs)
+      return k1.scale + (k2.scale - k1.scale) * t
+    }
+  }
+  return seg.clipScale
+}
 
 const STRIP_H = 68
 const STRIP_COUNT = 8
@@ -100,33 +115,154 @@ function AlignRightIcon() {
 
 interface PropertiesPanelProps {
   segment: Segment | null
+  currentTimeSec: number
   onUpdate: (id: string, patch: Partial<Segment>) => void
   onDelete: (id: string) => void
 }
 
 function VideoProps({
-  seg, onUpdate, onDelete
+  seg, currentTimeSec, onUpdate, onDelete
 }: {
   seg: VideoSegment
+  currentTimeSec: number
   onUpdate: (id: string, patch: Partial<VideoSegment>) => void
   onDelete: (id: string) => void
 }) {
+  const segStartSec = seg.startUs / 1e6
+  const timeWithinSegMs = (currentTimeSec - segStartSec) * 1000
+  const currentScale = getInterpolatedScale(seg, timeWithinSegMs)
   return (
     <div className="properties-panel">
       <h3>Clip Preview</h3>
       <ClipFilmstrip seg={seg} />
 
       <div className="prop-group">
-        <span className="prop-label">Scale</span>
-        <input
-          type="number"
-          className="prop-number"
-          value={(seg.clipScale ?? 1).toFixed(2)}
-          step={0.05}
-          min={0.05}
-          max={5}
-          onChange={(e) => onUpdate(seg.id, { clipScale: Number(e.target.value) })}
-        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <span className="prop-label" style={{ marginBottom: 0 }}>Scale</span>
+          <button
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: seg.scaleKeyframes?.some(kf => Math.abs(kf.timeMs - timeWithinSegMs) < 100) ? '#0a7ef0' : '#666',
+              cursor: 'pointer',
+              padding: '2px 4px',
+              fontSize: 16,
+              lineHeight: 1,
+              fontWeight: 'bold'
+            }}
+            title={seg.scaleKeyframes?.some(kf => Math.abs(kf.timeMs - timeWithinSegMs) < 100)
+              ? "Remove keyframe at current time"
+              : "Add keyframe at current time"}
+            onClick={() => {
+              const kfs = seg.scaleKeyframes || []
+              const existingIdx = kfs.findIndex(kf => Math.abs(kf.timeMs - timeWithinSegMs) < 100)
+
+              if (existingIdx >= 0) {
+                // Remove keyframe at current time
+                const updated = kfs.filter((_, i) => i !== existingIdx)
+                onUpdate(seg.id, { scaleKeyframes: updated.length > 0 ? updated : undefined })
+              } else {
+                // Add keyframe at current time
+                const newKf: ScaleKeyframe = { timeMs: Math.max(0, timeWithinSegMs), scale: currentScale }
+                const updated = [...kfs, newKf].sort((a, b) => a.timeMs - b.timeMs)
+                onUpdate(seg.id, { scaleKeyframes: updated })
+              }
+            }}
+          >
+            ◆
+          </button>
+          <input
+            type="number"
+            className="prop-number"
+            style={{ flex: 1 }}
+            value={currentScale.toFixed(2)}
+            step={0.05}
+            min={0.05}
+            max={5}
+            onChange={(e) => {
+              const newScale = Number(e.target.value)
+              const kfs = seg.scaleKeyframes || []
+              const existingIdx = kfs.findIndex(kf => Math.abs(kf.timeMs - timeWithinSegMs) < 100)
+
+              if (existingIdx >= 0) {
+                // Update existing keyframe
+                const updated = kfs.map((k, i) => i === existingIdx ? { ...k, scale: newScale } : k)
+                onUpdate(seg.id, { scaleKeyframes: updated })
+              } else if (kfs.length > 0) {
+                // Add new keyframe with this value
+                const newKf: ScaleKeyframe = { timeMs: Math.max(0, timeWithinSegMs), scale: newScale }
+                const updated = [...kfs, newKf].sort((a, b) => a.timeMs - b.timeMs)
+                onUpdate(seg.id, { scaleKeyframes: updated })
+              } else {
+                // No keyframes - update base scale
+                onUpdate(seg.id, { clipScale: newScale })
+              }
+            }}
+          />
+        </div>
+
+        {/* Keyframe timeline */}
+        {seg.scaleKeyframes && seg.scaleKeyframes.length > 0 && (
+          <div style={{
+            position: 'relative',
+            height: 24,
+            background: '#1a1a1a',
+            borderRadius: 3,
+            marginTop: 4,
+            border: '1px solid #333'
+          }}>
+            {/* Current time indicator */}
+            <div style={{
+              position: 'absolute',
+              left: `${Math.max(0, Math.min(100, (timeWithinSegMs / (seg.durationUs / 1000)) * 100))}%`,
+              top: 0,
+              bottom: 0,
+              width: 2,
+              background: '#fff',
+              opacity: 0.5,
+              pointerEvents: 'none'
+            }} />
+
+            {/* Keyframe diamonds */}
+            {seg.scaleKeyframes.map((kf, idx) => {
+              const position = (kf.timeMs / (seg.durationUs / 1000)) * 100
+              const isAtCurrentTime = Math.abs(kf.timeMs - timeWithinSegMs) < 100
+
+              return (
+                <div
+                  key={idx}
+                  style={{
+                    position: 'absolute',
+                    left: `${position}%`,
+                    top: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    cursor: 'pointer',
+                    fontSize: 14,
+                    lineHeight: 1,
+                    color: isAtCurrentTime ? '#0a7ef0' : '#888',
+                    fontWeight: 'bold',
+                    textShadow: '0 0 3px #000'
+                  }}
+                  title={`${(kf.timeMs / 1000).toFixed(2)}s: ${kf.scale.toFixed(2)}`}
+                  onClick={() => {
+                    // Jump to this keyframe time
+                    const targetTimeSec = seg.startUs / 1e6 + kf.timeMs / 1000
+                    // We can't directly set time here, but we could emit an event
+                    // For now, just select/deselect
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    // Delete keyframe on right-click
+                    const updated = seg.scaleKeyframes!.filter((_, i) => i !== idx)
+                    onUpdate(seg.id, { scaleKeyframes: updated.length > 0 ? updated : undefined })
+                  }}
+                >
+                  ◆
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
 
       <div className="prop-group">
@@ -359,7 +495,7 @@ function TextProps({
   )
 }
 
-export default function PropertiesPanel({ segment, onUpdate, onDelete }: PropertiesPanelProps) {
+export default function PropertiesPanel({ segment, currentTimeSec, onUpdate, onDelete }: PropertiesPanelProps) {
   if (!segment) {
     return (
       <div className="properties-panel">
@@ -371,7 +507,7 @@ export default function PropertiesPanel({ segment, onUpdate, onDelete }: Propert
   }
 
   if (segment.type === 'video') {
-    return <VideoProps seg={segment as VideoSegment} onUpdate={onUpdate as any} onDelete={onDelete} />
+    return <VideoProps seg={segment as VideoSegment} currentTimeSec={currentTimeSec} onUpdate={onUpdate as any} onDelete={onDelete} />
   }
 
   return <TextProps seg={segment as TextSegment} onUpdate={onUpdate} onDelete={onDelete} />
