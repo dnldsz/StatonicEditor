@@ -770,8 +770,14 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
       const inputIdx = audioInputStartIdx + i
       const startSec = seg.startUs / 1e6
       const endSec = (seg.startUs + seg.durationUs) / 1e6
-      // Delay and trim each audio segment
-      audioFilterParts.push(`[${inputIdx}:a]adelay=${Math.round(startSec * 1000)}|${Math.round(startSec * 1000)}[a${i}]`)
+      // Delay audio segments that start after video begins (startUs >= 0)
+      // For segments that start before (startUs < 0), sourceStartUs already handles the offset
+      if (startSec >= 0) {
+        audioFilterParts.push(`[${inputIdx}:a]adelay=${Math.round(startSec * 1000)}|${Math.round(startSec * 1000)}[a${i}]`)
+      } else {
+        // No delay needed - sourceStartUs already set the correct start point
+        audioFilterParts.push(`[${inputIdx}:a]anull[a${i}]`)
+      }
     })
 
     // Mix all audio streams
