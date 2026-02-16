@@ -23,6 +23,7 @@ interface ToolbarProps {
   accounts: Account[]
   currentAccountId: string | null
   onSelectAccount: (accountId: string) => void
+  lastSavedTime: Date | null
 }
 
 const ZOOM_STEPS = [20, 30, 50, 75, 100, 150, 200, 300, 500]
@@ -35,67 +36,63 @@ export default function Toolbar({
   zoom, onZoomChange,
   onExport,
   mode, onExitBatch,
-  accounts, currentAccountId, onSelectAccount
+  accounts, currentAccountId, onSelectAccount,
+  lastSavedTime
 }: ToolbarProps): JSX.Element {
   const zoomIn  = () => { const next = ZOOM_STEPS.find((z) => z > zoom); if (next) onZoomChange(next) }
   const zoomOut = () => { const prev = [...ZOOM_STEPS].reverse().find((z) => z < zoom); if (prev) onZoomChange(prev) }
 
+  const formatTime = (date: Date) => {
+    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+  }
+
   return (
     <div className="toolbar">
-      <div className="toolbar-spacer" />
-
-      <AccountDropdown
-        accounts={accounts}
-        currentAccountId={currentAccountId}
-        onSelectAccount={onSelectAccount}
-      />
-
-      <div className="toolbar-sep" />
-
-      {mode === 'batch' ? (
-        <div className="toolbar-group">
-          <button className="btn" onClick={onExitBatch} title="Exit batch mode">← Exit Batch</button>
-        </div>
-      ) : (
-        <div className="toolbar-group">
-          <button className="btn" onClick={onNew}  title="New project">New</button>
-          <button className="btn" onClick={onOpen} title="Open project">Open</button>
-          <button className="btn" onClick={onOpenFolder} title="Open batch folder">Batch Edit</button>
-          <button className="btn" onClick={onSave} title="Save project (⌘S)">Save</button>
-        </div>
-      )}
-
-      <div className="toolbar-sep" />
-
-      <div className="toolbar-group">
-        <button
-          className="btn btn-icon"
-          onClick={onUndo}
-          disabled={!canUndo}
-          title="Undo (⌘Z)"
-        >↩</button>
-        <button
-          className="btn btn-icon"
-          onClick={onRedo}
-          disabled={!canRedo}
-          title="Redo (⌘⇧Z)"
-        >↪</button>
+      <div className="toolbar-left">
+        <div className="toolbar-spacer" />
+        <AccountDropdown
+          accounts={accounts}
+          currentAccountId={currentAccountId}
+          onSelectAccount={onSelectAccount}
+        />
       </div>
 
-      <div className="toolbar-sep" />
+      <div className="toolbar-middle">
+        {mode === 'batch' ? (
+          <button className="btn" onClick={onExitBatch} title="Exit batch mode">← Exit Batch</button>
+        ) : (
+          <>
+            <button className="btn" onClick={onNew}  title="New project">New</button>
+            <button className="btn" onClick={onOpen} title="Open project">Open</button>
+            <button className="btn" onClick={onOpenFolder} title="Open batch folder">Batch Edit</button>
+            <button className="btn" onClick={onSave} title="Save project (⌘S)">Save</button>
+          </>
+        )}
+      </div>
 
-      <input
-        className="project-name-input"
-        value={projectName}
-        onChange={(e) => onRenameProject(e.target.value)}
-        onFocus={(e) => e.target.select()}
-      />
+      <div className="toolbar-right">
+        <div className="project-name-container">
+          <input
+            className="project-name-input"
+            value={projectName}
+            onChange={(e) => onRenameProject(e.target.value)}
+            onFocus={(e) => e.target.select()}
+            size={Math.max(10, projectName.length)}
+            style={{ width: `${Math.max(80, projectName.length * 7.2 + 5)}px` }}
+          />
+          {lastSavedTime && (
+            <span className="last-saved-time">
+              {' '}last saved {formatTime(lastSavedTime)}
+            </span>
+          )}
+        </div>
 
-      <div style={{ flex: 1 }} />
+        <div style={{ flex: 1 }} />
 
-      <button className="btn btn-primary" onClick={onExport} title="Export video">
-        Export
-      </button>
+        <button className="btn btn-primary" onClick={onExport} title="Export video">
+          Export
+        </button>
+      </div>
     </div>
   )
 }

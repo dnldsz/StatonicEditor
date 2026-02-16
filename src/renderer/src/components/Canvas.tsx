@@ -743,7 +743,7 @@ export default function Canvas({
                   ? `${seg.fontSize * (seg.textScale ?? 1) * (6.9 / 97.0) * 2.3 * previewScale}px ${seg.strokeColor}`
                   : undefined,
                 cursor: 'move', userSelect: 'none', whiteSpace: 'pre',
-                textAlign: seg.textAlign ?? 'center', lineHeight: 1.0, padding: '2px 4px'
+                textAlign: seg.textAlign ?? 'center', lineHeight: 1.05, padding: '2px 4px'
               }}
               onMouseDown={(e) => startMoveDrag(e, seg.id, 'text', seg.x, seg.y)}
               onClick={(e) => { e.stopPropagation(); onSelectSegment(seg.id) }}

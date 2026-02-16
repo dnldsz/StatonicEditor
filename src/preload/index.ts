@@ -5,8 +5,10 @@ contextBridge.exposeInMainWorld('api', {
   // Must be called synchronously on the raw File object from the drop event
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   openVideo: () => ipcRenderer.invoke('open-video'),
-  saveProject: (project: any) => ipcRenderer.invoke('save-project', project),
-  loadProject: () => ipcRenderer.invoke('load-project'),
+  saveProject: (project: any, thumbnailDataUrl?: string) => ipcRenderer.invoke('save-project', project, thumbnailDataUrl),
+  loadProject: (accountId: string) => ipcRenderer.invoke('load-project', accountId),
+  getProjectsList: (accountId: string) => ipcRenderer.invoke('get-projects-list', accountId),
+  loadProjectFromPath: (filePath: string) => ipcRenderer.invoke('load-project-from-path', filePath),
   openFolder: () => ipcRenderer.invoke('open-folder'),
   renderThumbnail: (projectPath: string, timeSec?: number) => ipcRenderer.invoke('render-thumbnail', projectPath, timeSec),
   getVideoInfo: (filePath: string) => ipcRenderer.invoke('get-video-info', filePath),

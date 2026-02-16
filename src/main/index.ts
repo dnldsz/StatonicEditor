@@ -261,6 +261,10 @@ function getClipLibraryPath(accountId?: string): string {
   return join(base, 'clips')  // legacy path for clips without account
 }
 
+function getProjectsPath(accountId: string): string {
+  return join(app.getPath('userData'), 'projects', 'accounts', accountId)
+}
+
 function getAccountsPath(): string {
   return join(app.getPath('userData'), 'accounts.json')
 }
@@ -337,30 +341,61 @@ ipcMain.handle('open-video', async () => {
   })
 })
 
-ipcMain.handle('save-project', async (_event, project: any) => {
-  const result = await dialog.showSaveDialog({
-    title: 'Save Project',
-    defaultPath: `${project.name ?? 'untitled'}.json`,
-    filters: [{ name: 'JSON', extensions: ['json'] }]
-  })
-  if (result.canceled || !result.filePath) return { cancelled: true }
+ipcMain.handle('save-project', async (_event, project: any, thumbnailDataUrl?: string) => {
   try {
-    writeFileSync(result.filePath, JSON.stringify(project, null, 2))
-    watchProjectFile(result.filePath)
-    return { ok: true, filePath: result.filePath }
+    // Get account ID from project
+    const accountId = project.accountId
+    if (!accountId) {
+      return { error: 'No account ID in project' }
+    }
+
+    // Create account projects directory if it doesn't exist
+    const projectsDir = getProjectsPath(accountId)
+    if (!existsSync(projectsDir)) {
+      mkdirSync(projectsDir, { recursive: true })
+    }
+
+    // Save project to account-specific directory
+    const fileName = `${project.name ?? 'untitled'}.json`.replace(/[/\\?%*:|"<>]/g, '-')
+    const filePath = join(projectsDir, fileName)
+
+    writeFileSync(filePath, JSON.stringify(project, null, 2))
+    watchProjectFile(filePath)
+
+    // Save thumbnail if provided
+    if (thumbnailDataUrl) {
+      const thumbnailPath = filePath.replace('.json', '_thumb.png')
+      const base64 = thumbnailDataUrl.replace(/^data:image\/png;base64,/, '')
+      writeFileSync(thumbnailPath, Buffer.from(base64, 'base64'))
+    }
+
+    // Save as last opened project
+    saveConfig({ lastProjectPath: filePath })
+
+    return { ok: true, filePath }
   } catch (err: any) {
     return { error: err.message }
   }
 })
 
-ipcMain.handle('load-project', async () => {
-  const result = await dialog.showOpenDialog({
-    title: 'Open Project',
-    filters: [{ name: 'JSON', extensions: ['json'] }],
-    properties: ['openFile']
-  })
-  if (result.canceled || result.filePaths.length === 0) return null
+ipcMain.handle('load-project', async (_event, accountId: string) => {
   try {
+    const projectsDir = getProjectsPath(accountId)
+
+    // Create directory if it doesn't exist
+    if (!existsSync(projectsDir)) {
+      mkdirSync(projectsDir, { recursive: true })
+    }
+
+    const result = await dialog.showOpenDialog({
+      title: 'Open Project',
+      defaultPath: projectsDir,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+      properties: ['openFile']
+    })
+
+    if (result.canceled || result.filePaths.length === 0) return null
+
     const projectPath = result.filePaths[0]
     const raw = readFileSync(projectPath, 'utf-8')
     watchProjectFile(projectPath)
@@ -369,6 +404,70 @@ ipcMain.handle('load-project', async () => {
     saveConfig({ lastProjectPath: projectPath })
 
     return JSON.parse(raw)
+  } catch (err: any) {
+    return { error: err.message }
+  }
+})
+
+// Get list of projects for an account
+ipcMain.handle('get-projects-list', async (_event, accountId: string) => {
+  try {
+    const projectsDir = getProjectsPath(accountId)
+    if (!existsSync(projectsDir)) return []
+
+    const files = readdirSync(projectsDir)
+    const projects = []
+
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue
+      const filePath = join(projectsDir, file)
+      try {
+        const stat = statSync(filePath)
+        if (!stat.isFile()) continue
+
+        const raw = readFileSync(filePath, 'utf-8')
+        const project = JSON.parse(raw)
+
+        // Check for thumbnail
+        const thumbnailPath = filePath.replace('.json', '_thumb.png')
+        const hasThumbnail = existsSync(thumbnailPath)
+
+        projects.push({
+          name: project.name,
+          filePath,
+          thumbnailPath: hasThumbnail ? thumbnailPath : null,
+          modifiedAt: stat.mtime.toISOString()
+        })
+      } catch (err) {
+        console.error(`Failed to load project ${file}:`, err)
+      }
+    }
+
+    // Sort by modified date (most recent first)
+    projects.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())
+
+    return projects
+  } catch (err: any) {
+    console.error('Failed to get projects list:', err)
+    return []
+  }
+})
+
+// Load project from file path
+ipcMain.handle('load-project-from-path', async (_event, filePath: string) => {
+  try {
+    if (!existsSync(filePath)) {
+      return { error: 'Project file not found' }
+    }
+
+    const raw = readFileSync(filePath, 'utf-8')
+    const project = JSON.parse(raw)
+    watchProjectFile(filePath)
+
+    // Save as last opened project
+    saveConfig({ lastProjectPath: filePath })
+
+    return project
   } catch (err: any) {
     return { error: err.message }
   }

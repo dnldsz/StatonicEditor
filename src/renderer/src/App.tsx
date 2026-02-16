@@ -6,6 +6,7 @@ import Timeline from './components/Timeline'
 import PropertiesPanel from './components/PropertiesPanel'
 import ClipLibrary from './components/ClipLibrary'
 import { AudioLibrary } from './components/AudioLibrary'
+import { ProjectPicker } from './components/ProjectPicker'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -491,9 +492,11 @@ async function renderTextToPng(seg: TextSegment, cw: number, ch: number): Promis
 
 export default function App(): JSX.Element {
   const [state, dispatch] = useReducer(reducer, initialState)
+  const [lastSavedTime, setLastSavedTime] = useState<Date | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const rafRef = useRef<number | null>(null)
   const playStartRef = useRef<{ wallTime: number; timelineSec: number } | null>(null)
+  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   // Stable ref so keyboard handler always reads fresh state without re-registering
   const stateRef = useRef(state)
@@ -699,16 +702,26 @@ export default function App(): JSX.Element {
     dispatch({ type: 'SET_PROJECT', project: { ...defaultProject, accountId: state.currentAccountId || undefined, tracks: [{ id: uid(), type: 'video', label: 'VIDEO', segments: [] }] } })
   }, [state.currentAccountId])
 
-  const handleOpenProject = useCallback(async () => {
-    const result = await window.api.loadProject()
+  const handleOpenProject = useCallback(() => {
+    const accountId = stateRef.current.currentAccountId
+    if (!accountId) {
+      alert('Please select an account first')
+      return
+    }
+    setShowProjectPicker(true)
+  }, [])
+
+  const handleSelectProject = useCallback(async (filePath: string) => {
+    setShowProjectPicker(false)
+    const result = await window.api.loadProjectFromPath(filePath)
     if (!result) return
     if ('error' in result) { alert(`Error: ${result.error}`); return }
     const project = result as Project
     // Switch to project's account if it has one
-    console.log('[handleOpenProject] project.accountId:', project.accountId)
-    console.log('[handleOpenProject] available accounts:', stateRef.current.accounts.map(a => a.id))
+    console.log('[handleSelectProject] project.accountId:', project.accountId)
+    console.log('[handleSelectProject] available accounts:', stateRef.current.accounts.map(a => a.id))
     if (project.accountId && stateRef.current.accounts.some(a => a.id === project.accountId)) {
-      console.log('[handleOpenProject] Switching to account:', project.accountId)
+      console.log('[handleSelectProject] Switching to account:', project.accountId)
       dispatch({ type: 'SET_CURRENT_ACCOUNT', accountId: project.accountId })
     }
     dispatch({ type: 'SET_PROJECT', project })
@@ -734,8 +747,47 @@ export default function App(): JSX.Element {
   }, [])
 
   const handleSaveProject = useCallback(async () => {
-    await window.api.saveProject(project)
+    // Generate thumbnail from canvas
+    let thumbnailDataUrl: string | undefined
+    try {
+      const canvasEl = document.querySelector('.canvas-wrapper video') as HTMLVideoElement
+      if (canvasEl) {
+        const tempCanvas = document.createElement('canvas')
+        tempCanvas.width = 270 // 9:16 aspect ratio thumbnail
+        tempCanvas.height = 480
+        const ctx = tempCanvas.getContext('2d')
+        if (ctx) {
+          ctx.drawImage(canvasEl, 0, 0, tempCanvas.width, tempCanvas.height)
+          thumbnailDataUrl = tempCanvas.toDataURL('image/png')
+        }
+      }
+    } catch (err) {
+      console.error('Failed to generate thumbnail:', err)
+    }
+
+    await window.api.saveProject(project, thumbnailDataUrl)
+    setLastSavedTime(new Date())
   }, [project])
+
+  // Auto-save on project changes (debounced)
+  useEffect(() => {
+    // Clear existing timeout
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current)
+    }
+
+    // Set new timeout to save after 2 seconds of inactivity
+    autoSaveTimeoutRef.current = setTimeout(() => {
+      handleSaveProject()
+    }, 2000)
+
+    // Cleanup on unmount
+    return () => {
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current)
+      }
+    }
+  }, [project, handleSaveProject])
 
   const handleAddVideo = useCallback(async () => {
     const info = await window.api.openVideo()
@@ -992,6 +1044,7 @@ export default function App(): JSX.Element {
   // ── clip library ────────────────────────────────────────────────────────────
 
   const [showClipLibrary, setShowClipLibrary] = useState(true)
+  const [showProjectPicker, setShowProjectPicker] = useState(false)
 
   const handleSelectClip = useCallback(async (clip: LibraryClip) => {
     // Preview clip in canvas or add to timeline
@@ -1107,6 +1160,7 @@ export default function App(): JSX.Element {
         accounts={accounts}
         currentAccountId={currentAccountId}
         onSelectAccount={handleSelectAccount}
+        lastSavedTime={lastSavedTime}
       />
 
       {/* Batch mode thumbnail grid */}
@@ -1255,6 +1309,15 @@ export default function App(): JSX.Element {
           onPackBaseTrack={handlePackBaseTrack}
         />
       </div>
+
+      {/* Project Picker Modal */}
+      {showProjectPicker && currentAccountId && (
+        <ProjectPicker
+          accountId={currentAccountId}
+          onSelect={handleSelectProject}
+          onClose={() => setShowProjectPicker(false)}
+        />
+      )}
     </div>
   )
 }

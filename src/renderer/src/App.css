@@ -206,9 +206,7 @@ body {
 /* ── Toolbar ─────────────────────────────────────────────────────────────── */
 .toolbar {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 12px;
+  align-items: stretch;
   height: 44px;
   background: #1e1e1e;
   border-bottom: 1px solid #2e2e2e;
@@ -217,6 +215,35 @@ body {
 }
 
 .toolbar > * { -webkit-app-region: no-drag; }
+
+.toolbar-left {
+  width: 240px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border-right: 1px solid #2e2e2e;
+  flex-shrink: 0;
+  justify-content: space-between;
+}
+
+.toolbar-middle {
+  width: 280px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border-right: 1px solid #2e2e2e;
+  flex-shrink: 0;
+}
+
+.toolbar-right {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+}
 
 .toolbar-spacer { width: 72px; flex-shrink: 0; } /* macOS traffic lights */
 
@@ -277,20 +304,33 @@ body {
   font-size: 14px;
 }
 
+.project-name-container {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
 .project-name-input {
   background: transparent;
   border: none;
   color: #ccc;
   font-size: 13px;
   font-weight: 600;
-  text-align: center;
-  width: 180px;
+  text-align: left;
   outline: none;
   border-bottom: 1px solid transparent;
   transition: border-color 0.15s;
+  padding: 0;
 }
 .project-name-input:hover { border-color: #444; }
 .project-name-input:focus { border-color: #0a7ef0; }
+
+.last-saved-time {
+  font-size: 11px;
+  color: #666;
+  white-space: nowrap;
+  font-weight: 400;
+}
 
 .zoom-display {
   font-size: 11px;
@@ -822,7 +862,7 @@ textarea.prop-input {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 8px;
+  padding: 8px 10px;
   display: grid;
   gap: 8px;
   grid-template-columns: 1fr;
@@ -1972,4 +2012,130 @@ textarea.prop-input {
   font-size: 8px;
   line-height: 1;
   text-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+}
+
+/* ── Project Picker ──────────────────────────────────────────────────────── */
+.project-picker-modal {
+  width: 900px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #333;
+  flex-shrink: 0;
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #ddd;
+}
+
+.modal-close-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: transparent;
+  border: none;
+  color: #aaa;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-close-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.project-picker-body {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+  min-height: 400px;
+}
+
+.project-picker-loading,
+.project-picker-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 400px;
+  color: #666;
+  font-size: 14px;
+}
+
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.project-card {
+  background: #1e1e1e;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.project-card:hover {
+  border-color: #444;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.project-thumbnail {
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.project-thumbnail img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.project-thumbnail-placeholder {
+  font-size: 48px;
+  opacity: 0.3;
+}
+
+.project-info {
+  padding: 12px;
+}
+
+.project-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #ddd;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-date {
+  font-size: 11px;
+  color: #666;
 }
