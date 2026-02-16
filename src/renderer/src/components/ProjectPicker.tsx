@@ -28,6 +28,15 @@ export function ProjectPicker({ accountId, onSelect, onClose }: ProjectPickerPro
     setLoading(false)
   }
 
+  const handleDelete = async (e: React.MouseEvent, filePath: string, projectName: string) => {
+    e.stopPropagation() // Prevent opening the project
+    if (!confirm(`Delete "${projectName}"? This cannot be undone.`)) return
+
+    await window.api.deleteProject(filePath)
+    // Reload projects list
+    loadProjects()
+  }
+
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr)
     const now = new Date()
@@ -84,6 +93,13 @@ export function ProjectPicker({ accountId, onSelect, onClose }: ProjectPickerPro
                     <div className="project-name">{project.name}</div>
                     <div className="project-date">{formatDate(project.modifiedAt)}</div>
                   </div>
+                  <button
+                    className="project-delete-btn"
+                    onClick={(e) => handleDelete(e, project.filePath, project.name)}
+                    title="Delete project"
+                  >
+                    ×
+                  </button>
                 </div>
               ))}
             </div>

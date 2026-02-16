@@ -478,6 +478,28 @@ ipcMain.handle('load-project-from-path', async (_event, filePath: string) => {
   }
 })
 
+// Delete project
+ipcMain.handle('delete-project', async (_event, filePath: string) => {
+  try {
+    if (!existsSync(filePath)) {
+      return { error: 'Project file not found' }
+    }
+
+    // Delete the project file
+    rmSync(filePath, { force: true })
+
+    // Delete the thumbnail if it exists
+    const thumbnailPath = filePath.replace('.json', '_thumb.png')
+    if (existsSync(thumbnailPath)) {
+      rmSync(thumbnailPath, { force: true })
+    }
+
+    return { ok: true }
+  } catch (err: any) {
+    return { error: err.message }
+  }
+})
+
 // Called when a file is dragged into the renderer — no dialog needed
 ipcMain.handle('get-video-info', async (_event, filePath: string) => {
   const name = filePath.split('/').pop() ?? filePath

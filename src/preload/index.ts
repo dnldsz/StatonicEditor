@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('api', {
   loadProject: (accountId: string) => ipcRenderer.invoke('load-project', accountId),
   getProjectsList: (accountId: string) => ipcRenderer.invoke('get-projects-list', accountId),
   loadProjectFromPath: (filePath: string) => ipcRenderer.invoke('load-project-from-path', filePath),
+  deleteProject: (filePath: string) => ipcRenderer.invoke('delete-project', filePath),
   openFolder: () => ipcRenderer.invoke('open-folder'),
   renderThumbnail: (projectPath: string, timeSec?: number) => ipcRenderer.invoke('render-thumbnail', projectPath, timeSec),
   getVideoInfo: (filePath: string) => ipcRenderer.invoke('get-video-info', filePath),
