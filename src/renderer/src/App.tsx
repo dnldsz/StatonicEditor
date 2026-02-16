@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react'
-import { Project, AppState, Action, VideoSegment, TextSegment, Track, Segment, BatchProject, LibraryClip, Account, ScaleKeyframe } from './types'
+import { Project, AppState, Action, VideoSegment, TextSegment, Track, Segment, BatchProject, LibraryClip, LibraryAudio, Account, ScaleKeyframe } from './types'
 import Toolbar from './components/Toolbar'
 import Canvas from './components/Canvas'
 import Timeline from './components/Timeline'
 import PropertiesPanel from './components/PropertiesPanel'
 import ClipLibrary from './components/ClipLibrary'
+import { AudioLibrary } from './components/AudioLibrary'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -157,6 +158,21 @@ function applyProjectAction(project: Project, action: Action): Project {
       return { ...project, tracks }
     }
 
+    case 'ADD_AUDIO_SEGMENT': {
+      const audioTrack = project.tracks.find((t) => t.type === 'audio')
+      if (audioTrack) {
+        // Add to existing audio track
+        const tracks = project.tracks.map((t) =>
+          t.type !== 'audio' ? t : { ...t, segments: [...t.segments, action.segment] }
+        )
+        return { ...project, tracks }
+      } else {
+        // Create new audio track at the bottom (insert at beginning so it renders below)
+        const newTrack: Track = { id: uid(), type: 'audio', label: 'AUDIO', segments: [action.segment] }
+        return { ...project, tracks: [newTrack, ...project.tracks] }
+      }
+    }
+
     case 'ADD_TEXT_WITH_TRACK': {
       const newTrack = { ...action.track, segments: [action.segment] }
       return { ...project, tracks: [...project.tracks, newTrack] }
@@ -176,6 +192,13 @@ function applyProjectAction(project: Project, action: Action): Project {
           s.id === action.id ? ({ ...s, ...action.patch } as Segment) : s
         )
       }))
+      return { ...project, tracks }
+    }
+
+    case 'UPDATE_TRACK': {
+      const tracks = project.tracks.map((t) =>
+        t.id === action.id ? { ...t, ...action.patch } : t
+      )
       return { ...project, tracks }
     }
 
@@ -267,8 +290,8 @@ function applyProjectAction(project: Project, action: Action): Project {
 // ── outer reducer (history + non-project actions) ─────────────────────────────
 
 const UNDOABLE = new Set<Action['type']>([
-  'ADD_VIDEO_SEGMENT', 'ADD_TEXT_WITH_TRACK', 'ADD_SEGMENT_TO_TRACK',
-  'UPDATE_SEGMENT', 'DELETE_SEGMENT', 'SLICE_AT', 'MOVE_SEGMENT_TO_TRACK',
+  'ADD_VIDEO_SEGMENT', 'ADD_AUDIO_SEGMENT', 'ADD_TEXT_WITH_TRACK', 'ADD_SEGMENT_TO_TRACK',
+  'UPDATE_SEGMENT', 'UPDATE_TRACK', 'DELETE_SEGMENT', 'SLICE_AT', 'MOVE_SEGMENT_TO_TRACK',
   'MOVE_SEGMENT_BETWEEN_TRACKS'
 ])
 
@@ -382,7 +405,7 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_CROPPING':  return { ...state, croppingId: action.id }
     case 'SET_ZOOM':      return { ...state, zoom: Math.min(500, Math.max(20, action.zoom)) }
     case 'SET_CLIPBOARD': return { ...state, clipboard: action.segment }
-    case 'SET_ACCOUNTS':  return { ...state, accounts: action.accounts }
+    case 'SET_CURRENT_ACCOUNTS':  return { ...state, accounts: action.accounts }
     case 'SET_CURRENT_ACCOUNT': return { ...state, currentAccountId: action.accountId }
     case 'ADD_ACCOUNT':   return { ...state, accounts: [...state.accounts, action.account], currentAccountId: action.account.id }
   }
@@ -421,6 +444,11 @@ declare global {
       getClipLibrary: () => Promise<LibraryClip[]>
       deleteClipFromLibrary: (clipId: string) => Promise<{ ok?: boolean; error?: string }>
       updateClipMetadata: (clipId: string, updates: Partial<LibraryClip>) => Promise<{ ok?: boolean; clip?: LibraryClip; error?: string }>
+      selectAudioFile: () => Promise<{ ok?: boolean; audio?: LibraryAudio; error?: string } | null>
+      importAudio: (sourcePath: string, isVideo: boolean) => Promise<{ ok?: boolean; audio?: LibraryAudio; error?: string }>
+      getAudioLibrary: () => Promise<LibraryAudio[]>
+      updateAudioMetadata: (audioId: string, updates: Partial<LibraryAudio>) => Promise<{ ok?: boolean; audio?: LibraryAudio; error?: string }>
+      deleteAudioFromLibrary: (audioId: string) => Promise<{ ok?: boolean; error?: string }>
     }
   }
 }
@@ -562,7 +590,7 @@ export default function App(): JSX.Element {
       { id: 'daniel', name: 'Daniel', created: new Date().toISOString() },
       { id: 'stacy', name: 'Stacy', created: new Date().toISOString() }
     ]
-    dispatch({ type: 'SET_ACCOUNTS', accounts: hardCodedAccounts })
+    dispatch({ type: 'SET_CURRENT_ACCOUNTS', accounts: hardCodedAccounts })
     dispatch({ type: 'SET_CURRENT_ACCOUNT', accountId: 'daniel' })
   }, [])
 
@@ -668,14 +696,22 @@ export default function App(): JSX.Element {
 
   const handleNewProject = useCallback(() => {
     if (!confirm('Start a new project? Unsaved changes will be lost.')) return
-    dispatch({ type: 'SET_PROJECT', project: { ...defaultProject, tracks: [{ id: uid(), type: 'video', label: 'VIDEO', segments: [] }] } })
-  }, [])
+    dispatch({ type: 'SET_PROJECT', project: { ...defaultProject, accountId: state.currentAccountId || undefined, tracks: [{ id: uid(), type: 'video', label: 'VIDEO', segments: [] }] } })
+  }, [state.currentAccountId])
 
   const handleOpenProject = useCallback(async () => {
     const result = await window.api.loadProject()
     if (!result) return
     if ('error' in result) { alert(`Error: ${result.error}`); return }
-    dispatch({ type: 'SET_PROJECT', project: result as Project })
+    const project = result as Project
+    // Switch to project's account if it has one
+    console.log('[handleOpenProject] project.accountId:', project.accountId)
+    console.log('[handleOpenProject] available accounts:', stateRef.current.accounts.map(a => a.id))
+    if (project.accountId && stateRef.current.accounts.some(a => a.id === project.accountId)) {
+      console.log('[handleOpenProject] Switching to account:', project.accountId)
+      dispatch({ type: 'SET_CURRENT_ACCOUNT', accountId: project.accountId })
+    }
+    dispatch({ type: 'SET_PROJECT', project })
     dispatch({ type: 'EXIT_BATCH' })
   }, [])
 
@@ -828,6 +864,43 @@ export default function App(): JSX.Element {
     dispatch({ type: 'SET_TIME', t: timeSec })
   }, [project])
 
+  const handleDropLibraryAudio = useCallback((audio: LibraryAudio, timeUs: number) => {
+    try {
+      console.log('[App] handleDropLibraryAudio called with:', audio, timeUs)
+      const timeSec = timeUs / 1e6
+
+      // Calculate actual duration considering trim
+      const fullDurationMs = audio.duration * 1000
+      const trimStartMs = audio.trimStartMs ?? 0
+      const trimEndMs = audio.trimEndMs ?? fullDurationMs
+      const trimmedDurationMs = trimEndMs - trimStartMs
+      const trimmedDurationUs = Math.round(trimmedDurationMs * 1000)
+
+      const seg: AudioSegment = {
+        id: uid(),
+        type: 'audio',
+        src: audio.path,
+        name: audio.name,
+        startUs: timeUs,
+        durationUs: trimmedDurationUs,
+        sourceStartUs: Math.round(trimStartMs * 1000),
+        sourceDurationUs: trimmedDurationUs,
+        fileDurationUs: Math.round(fullDurationMs * 1000),
+        volume: 1,
+        dropTimeUs: audio.dropTimeMs ? Math.round(audio.dropTimeMs * 1000) : undefined
+      }
+      console.log('[App] Created audio segment:', seg)
+      console.log('[App] Dispatching ADD_AUDIO_SEGMENT')
+      dispatch({ type: 'ADD_AUDIO_SEGMENT', segment: seg })
+      dispatch({ type: 'SET_SELECTED', id: seg.id })
+      dispatch({ type: 'SET_TIME', t: timeSec })
+      console.log('[App] Audio drop completed successfully')
+    } catch (err) {
+      console.error('[App] Error in handleDropLibraryAudio:', err)
+      alert('Error dropping audio: ' + (err as Error).message)
+    }
+  }, [project])
+
   // ── hot-reload: apply external file changes (e.g. from MCP / Claude) ───────
 
   const [reloadToast, setReloadToast] = useState(false)
@@ -836,6 +909,10 @@ export default function App(): JSX.Element {
       // Preserve playhead position and selection when reloading from file
       const currentTime = stateRef.current.currentTimeSec
       const currentSelection = stateRef.current.selectedId
+      // Switch to project's account if it has one
+      if (project.accountId && stateRef.current.accounts.some(a => a.id === project.accountId)) {
+        dispatch({ type: 'SET_CURRENT_ACCOUNT', accountId: project.accountId })
+      }
       dispatch({ type: 'SET_PROJECT', project })
       dispatch({ type: 'SET_TIME', t: currentTime })
       if (currentSelection) {
@@ -850,6 +927,10 @@ export default function App(): JSX.Element {
   // Listen for Claude project load requests
   useEffect(() => {
     const unsub = window.api.onLoadProjectRequest(({ project, path }) => {
+      // Switch to project's account if it has one
+      if (project.accountId && stateRef.current.accounts.some(a => a.id === project.accountId)) {
+        dispatch({ type: 'SET_CURRENT_ACCOUNT', accountId: project.accountId })
+      }
       dispatch({ type: 'SET_PROJECT', project })
       dispatch({ type: 'SET_FILE_PATH', path })
       // Show toast notification
@@ -916,6 +997,67 @@ export default function App(): JSX.Element {
     // Preview clip in canvas or add to timeline
     // For now, just log it - we'll implement add to timeline next
     console.log('Selected clip:', clip)
+  }, [])
+
+  // ── audio library ───────────────────────────────────────────────────────────
+
+  const [audios, setAudios] = useState<LibraryAudio[]>([])
+  const [propertiesPanelOpen, setPropertiesPanelOpen] = useState(false)
+
+  // Load audio library on mount
+  useEffect(() => {
+    window.api.getAudioLibrary().then((result: LibraryAudio[]) => {
+      setAudios(result)
+    })
+  }, [])
+
+  const handleImportAudio = useCallback(async (filePath?: string, isVideo?: boolean) => {
+    let result
+    if (filePath) {
+      // Import from dropped file
+      result = await window.api.importAudio(filePath, isVideo || false)
+    } else {
+      // Use Electron dialog to select audio/video file
+      result = await window.api.selectAudioFile()
+    }
+
+    if (!result) return null
+    if ('error' in result) {
+      alert(`Error: ${result.error}`)
+      return null
+    }
+
+    // Reload audio library
+    const audios = await window.api.getAudioLibrary()
+    setAudios(audios)
+
+    // Return the newly imported audio so AudioLibrary can show config modal
+    // The result has shape { ok: true, audio: LibraryAudio }
+    return (result as any).audio as LibraryAudio
+  }, [])
+
+  const handleUpdateAudio = useCallback(async (audio: LibraryAudio) => {
+    const result = await window.api.updateAudioMetadata(audio.id, {
+      waveformData: audio.waveformData,
+      dropTimeMs: audio.dropTimeMs,
+      trimStartMs: audio.trimStartMs,
+      trimEndMs: audio.trimEndMs
+    })
+    if ('error' in result) {
+      alert(`Error: ${result.error}`)
+      return
+    }
+    // Update local state
+    setAudios(prev => prev.map(a => a.id === audio.id ? result.audio : a))
+  }, [])
+
+  const handleDeleteAudio = useCallback(async (id: string) => {
+    const result = await window.api.deleteAudioFromLibrary(id)
+    if ('error' in result) {
+      alert(`Error: ${result.error}`)
+      return
+    }
+    setAudios(prev => prev.filter(a => a.id !== id))
   }, [])
 
   // ── accounts ────────────────────────────────────────────────────────────────
@@ -1002,6 +1144,15 @@ export default function App(): JSX.Element {
           </div>
         )}
 
+        <div className="audio-library-panel">
+          <AudioLibrary
+            audios={audios}
+            onImport={handleImportAudio}
+            onUpdate={handleUpdateAudio}
+            onDelete={handleDeleteAudio}
+          />
+        </div>
+
         <div
           className="canvas-area"
           onDoubleClick={() => { if (croppingId) dispatch({ type: 'SET_CROPPING', id: null }) }}
@@ -1022,38 +1173,63 @@ export default function App(): JSX.Element {
 
           {/* Playback controls */}
           <div className="playback-bar">
-            <span className="playback-time">{formatTimestamp(currentTimeSec)}</span>
-            <div className="toolbar-group">
-              <button
-                className="btn btn-icon"
-                onClick={() => seekTo(Math.max(0, currentTimeSec - 1 / 30))}
-                title="Step back (←)"
-              >⏮</button>
-              <button
-                className="btn btn-play"
-                onClick={togglePlay}
-                title="Play / Pause (Space)"
-              >{isPlaying ? '⏸' : '▶'}</button>
-              <button
-                className="btn btn-icon"
-                onClick={() => seekTo(currentTimeSec + 1 / 30)}
-                title="Step forward (→)"
-              >⏭</button>
+            <div className="playback-bar-left">
+              <button className="btn" onClick={handleAddVideo} title="Add video clip">+ Video</button>
+              <button className="btn" onClick={handleAddText} title="Add text overlay">+ Text</button>
             </div>
+            <div className="playback-bar-center">
+              <span className="playback-time">{formatTimestamp(currentTimeSec)}</span>
+              <div className="toolbar-group">
+                <button
+                  className="btn btn-icon"
+                  onClick={() => seekTo(Math.max(0, currentTimeSec - 1 / 30))}
+                  title="Step back (←)"
+                >⏮</button>
+                <button
+                  className="btn btn-play"
+                  onClick={togglePlay}
+                  title="Play / Pause (Space)"
+                >{isPlaying ? '⏸' : '▶'}</button>
+                <button
+                  className="btn btn-icon"
+                  onClick={() => seekTo(currentTimeSec + 1 / 30)}
+                  title="Step forward (→)"
+                >⏭</button>
+              </div>
+            </div>
+            <div className="playback-bar-right"></div>
           </div>
         </div>
 
-        <div className="properties-area">
-          <PropertiesPanel
-            segment={selectedSegment}
-            currentTimeSec={currentTimeSec}
-            onUpdate={(id, patch) => dispatch({ type: 'UPDATE_SEGMENT', id, patch })}
-            onDelete={(id) => {
-              dispatch({ type: 'DELETE_SEGMENT', id })
-              dispatch({ type: 'SET_SELECTED', id: null })
-            }}
-          />
-        </div>
+        {propertiesPanelOpen && (
+          <div className="properties-area">
+            <PropertiesPanel
+              segment={selectedSegment}
+              currentTimeSec={currentTimeSec}
+              onUpdate={(id, patch) => dispatch({ type: 'UPDATE_SEGMENT', id, patch })}
+              onDelete={(id) => {
+                dispatch({ type: 'DELETE_SEGMENT', id })
+                dispatch({ type: 'SET_SELECTED', id: null })
+              }}
+            />
+            <button
+              className="properties-panel-close"
+              onClick={() => setPropertiesPanelOpen(false)}
+              title="Hide Properties"
+            >
+              ×
+            </button>
+          </div>
+        )}
+        {!propertiesPanelOpen && (
+          <button
+            className="properties-panel-toggle"
+            onClick={() => setPropertiesPanelOpen(true)}
+            title="Show Properties"
+          >
+            <span>⚙</span>
+          </button>
+        )}
       </div>
 
       <div className="timeline-area">
@@ -1068,9 +1244,11 @@ export default function App(): JSX.Element {
           }}
           onSelectSegment={(id) => dispatch({ type: 'SET_SELECTED', id })}
           onUpdateSegment={(id, patch) => dispatch({ type: 'MOVE_SEGMENT', id, patch: patch as any })}
+          onUpdateTrack={(id, patch) => dispatch({ type: 'UPDATE_TRACK', id, patch })}
           onDuplicateSegment={handleDuplicateSegment}
           onDropVideo={handleDropVideo}
           onDropLibraryClip={handleDropLibraryClip}
+          onDropLibraryAudio={handleDropLibraryAudio}
           onZoomChange={(z) => dispatch({ type: 'SET_ZOOM', zoom: z })}
           onMoveSegmentToNewTrack={handleMoveSegmentToNewTrack}
           onMoveSegmentBetweenTracks={handleMoveSegmentBetweenTracks}

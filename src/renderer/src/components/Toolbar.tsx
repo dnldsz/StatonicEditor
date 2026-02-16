@@ -60,7 +60,7 @@ export default function Toolbar({
         <div className="toolbar-group">
           <button className="btn" onClick={onNew}  title="New project">New</button>
           <button className="btn" onClick={onOpen} title="Open project">Open</button>
-          <button className="btn" onClick={onOpenFolder} title="Open batch folder">Open Folder</button>
+          <button className="btn" onClick={onOpenFolder} title="Open batch folder">Batch Edit</button>
           <button className="btn" onClick={onSave} title="Save project (⌘S)">Save</button>
         </div>
       )}
@@ -84,13 +84,6 @@ export default function Toolbar({
 
       <div className="toolbar-sep" />
 
-      <div className="toolbar-group">
-        <button className="btn" onClick={onAddVideo} title="Add video clip">+ Video</button>
-        <button className="btn" onClick={onAddText}  title="Add text overlay">+ Text</button>
-      </div>
-
-      <div className="toolbar-sep" />
-
       <input
         className="project-name-input"
         value={projectName}
@@ -98,15 +91,7 @@ export default function Toolbar({
         onFocus={(e) => e.target.select()}
       />
 
-      <div className="toolbar-sep" />
-
-      <div className="toolbar-group">
-        <button className="btn btn-icon" onClick={zoomOut} title="Zoom out timeline">−</button>
-        <span className="zoom-display">{zoom}px/s</span>
-        <button className="btn btn-icon" onClick={zoomIn}  title="Zoom in timeline">+</button>
-      </div>
-
-      <div className="toolbar-sep" />
+      <div style={{ flex: 1 }} />
 
       <button className="btn btn-primary" onClick={onExport} title="Export video">
         Export

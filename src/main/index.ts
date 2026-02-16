@@ -606,17 +606,74 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
     })
   }
 
-  const filterComplex = filterParts.join(';')
+  // Collect audio segments from non-muted tracks
+  const audioTracks = tracks.filter((t: any) => (t.type === 'audio' || t.type === 'video') && !t.muted)
+  const audioSegs: any[] = []
+
+  for (const track of audioTracks) {
+    if (track.type === 'audio') {
+      for (const seg of track.segments) {
+        audioSegs.push(seg)
+      }
+    } else if (track.type === 'video') {
+      // Include video audio if track is not muted
+      for (const seg of track.segments) {
+        audioSegs.push({ ...seg, isVideoAudio: true })
+      }
+    }
+  }
+
+  let audioArgs: string[] = []
+  let audioFilter = ''
+
+  if (audioSegs.length > 0) {
+    // Add audio inputs (after video inputs and PNG overlays)
+    const audioInputStartIdx = 1 + allVideoSegs.length + textOverlays.length
+
+    for (const seg of audioSegs) {
+      audioArgs.push(
+        '-ss', String(seg.sourceStartUs / 1_000_000),
+        '-t', String(seg.sourceDurationUs / 1_000_000),
+        '-i', seg.src
+      )
+    }
+
+    // Create audio filter to mix all audio segments
+    const audioFilterParts: string[] = []
+    audioSegs.forEach((seg, i) => {
+      const inputIdx = audioInputStartIdx + i
+      const startSec = seg.startUs / 1e6
+      const endSec = (seg.startUs + seg.durationUs) / 1e6
+      // Delay and trim each audio segment
+      audioFilterParts.push(`[${inputIdx}:a]adelay=${Math.round(startSec * 1000)}|${Math.round(startSec * 1000)}[a${i}]`)
+    })
+
+    // Mix all audio streams
+    if (audioSegs.length === 1) {
+      audioFilter = audioFilterParts[0] + ';[a0]anull[aout]'
+    } else {
+      const mixInputs = audioSegs.map((_, i) => `[a${i}]`).join('')
+      audioFilter = audioFilterParts.join(';') + `;${mixInputs}amix=inputs=${audioSegs.length}:duration=longest[aout]`
+    }
+  }
+
+  const filterComplex = audioSegs.length > 0
+    ? filterParts.join(';') + ';' + audioFilter
+    : filterParts.join(';')
+
   const args = [
     '-y',
     ...inputs,
     ...pngInputArgs,
+    ...audioArgs,
     '-filter_complex', filterComplex,
     '-map', '[vout]',
+    ...(audioSegs.length > 0 ? ['-map', '[aout]'] : ['-an']),
     '-c:v', 'libx264',
     '-preset', 'fast',
     '-crf', '23',
     '-pix_fmt', 'yuv420p',
+    ...(audioSegs.length > 0 ? ['-c:a', 'aac', '-b:a', '192k'] : []),
     filePath
   ]
 
@@ -941,6 +998,149 @@ ipcMain.handle('update-clip-metadata', async (_event, clipId: string, updates: a
   }
 
   return { error: 'Clip not found' }
+})
+
+// ── Audio Library ──────────────────────────────────────────────────────────────
+
+function getAudioLibraryPath(): string {
+  // Audios are shared across accounts
+  return join(app.getPath('userData'), 'audio-library')
+}
+
+ipcMain.handle('select-audio-file', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Select Audio or Video File',
+    filters: [
+      { name: 'Audio/Video', extensions: ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'mp4', 'mov', 'avi', 'mkv'] }
+    ],
+    properties: ['openFile']
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+
+  const sourcePath = result.filePaths[0]
+  const isVideo = ['.mp4', '.mov', '.avi', '.mkv'].some(ext => sourcePath.toLowerCase().endsWith(ext))
+
+  // Import the audio
+  return await ipcMain.handlers.get('import-audio')!({} as any, sourcePath, isVideo)
+})
+
+ipcMain.handle('import-audio', async (_event, sourcePath: string, isVideo: boolean) => {
+  const audioId = uid()
+  const audioDir = join(getAudioLibraryPath(), audioId)
+  mkdirSync(audioDir, { recursive: true })
+
+  const ext = extname(sourcePath)
+  const audioPath = join(audioDir, 'audio.mp3')
+
+  try {
+    if (isVideo) {
+      // Extract audio from video
+      await new Promise((resolve, reject) => {
+        const proc = spawn('ffmpeg', [
+          '-i', sourcePath,
+          '-vn',  // No video
+          '-acodec', 'libmp3lame',
+          '-q:a', '2',  // High quality
+          audioPath, '-y'
+        ])
+        proc.on('close', (code) => code === 0 ? resolve(null) : reject(new Error('ffmpeg failed')))
+        proc.on('error', reject)
+      })
+    } else {
+      // Copy audio file directly
+      copyFileSync(sourcePath, audioPath)
+    }
+
+    // Get audio duration
+    const proc = spawn('ffprobe', [
+      '-v', 'quiet',
+      '-print_format', 'json',
+      '-show_streams',
+      audioPath
+    ])
+    let out = ''
+    proc.stdout.on('data', (d: Buffer) => (out += d.toString()))
+
+    return new Promise((resolve) => {
+      proc.on('close', () => {
+        try {
+          const json = JSON.parse(out)
+          const astream = json.streams?.find((s: any) => s.codec_type === 'audio')
+          const durationSec = parseFloat(astream?.duration || '0')
+
+          // Save metadata
+          const metadata = {
+            id: audioId,
+            name: basename(sourcePath, ext),
+            path: audioPath,
+            originalPath: sourcePath,
+            duration: durationSec,
+            imported: new Date().toISOString()
+          }
+
+          writeFileSync(join(audioDir, 'metadata.json'), JSON.stringify(metadata, null, 2))
+          resolve({ ok: true, audio: metadata })
+        } catch (err: any) {
+          resolve({ error: err.message })
+        }
+      })
+
+      proc.on('error', (err) => {
+        resolve({ error: err.message })
+      })
+    })
+  } catch (err: any) {
+    return { error: err.message }
+  }
+})
+
+ipcMain.handle('get-audio-library', async () => {
+  const audios: any[] = []
+  const libraryPath = getAudioLibraryPath()
+  if (!existsSync(libraryPath)) return audios
+
+  const audioDirs = readdirSync(libraryPath)
+  for (const audioId of audioDirs) {
+    const audioDir = join(libraryPath, audioId)
+    try {
+      const stat = statSync(audioDir)
+      if (!stat.isDirectory()) continue
+
+      const metadataPath = join(audioDir, 'metadata.json')
+      if (existsSync(metadataPath)) {
+        const metadata = JSON.parse(readFileSync(metadataPath, 'utf-8'))
+        audios.push(metadata)
+      }
+    } catch {
+      // Skip invalid directories
+    }
+  }
+
+  return audios
+})
+
+ipcMain.handle('update-audio-metadata', async (_event, audioId: string, updates: any) => {
+  const metadataPath = join(getAudioLibraryPath(), audioId, 'metadata.json')
+  if (existsSync(metadataPath)) {
+    try {
+      const metadata = JSON.parse(readFileSync(metadataPath, 'utf-8'))
+      const updated = { ...metadata, ...updates }
+      writeFileSync(metadataPath, JSON.stringify(updated, null, 2))
+      return { ok: true, audio: updated }
+    } catch (err: any) {
+      return { error: err.message }
+    }
+  }
+  return { error: 'Audio not found' }
+})
+
+ipcMain.handle('delete-audio-from-library', async (_event, audioId: string) => {
+  const audioDir = join(getAudioLibraryPath(), audioId)
+  if (existsSync(audioDir)) {
+    rmSync(audioDir, { recursive: true, force: true })
+    return { ok: true }
+  }
+  return { error: 'Audio not found' }
 })
 
 // ── Accounts ───────────────────────────────────────────────────────────────────

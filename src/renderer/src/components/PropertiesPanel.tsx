@@ -510,5 +510,46 @@ export default function PropertiesPanel({ segment, currentTimeSec, onUpdate, onD
     return <VideoProps seg={segment as VideoSegment} currentTimeSec={currentTimeSec} onUpdate={onUpdate as any} onDelete={onDelete} />
   }
 
+  if (segment.type === 'audio') {
+    const audioSeg = segment as any
+    return (
+      <div className="properties-panel">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <h3>Audio: {audioSeg.name}</h3>
+          <button
+            onClick={onDelete}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#999',
+              cursor: 'pointer',
+              fontSize: 20,
+              padding: 4
+            }}
+            title="Delete segment"
+          >×</button>
+        </div>
+
+        <div className="prop-group">
+          <div className="prop-label">Volume</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={audioSeg.volume ?? 1}
+              onChange={(e) => onUpdate({ volume: parseFloat(e.target.value) })}
+              style={{ flex: 1 }}
+            />
+            <span style={{ minWidth: 40, textAlign: 'right', fontSize: 12, color: '#aaa' }}>
+              {Math.round((audioSeg.volume ?? 1) * 100)}%
+            </span>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return <TextProps seg={segment as TextSegment} onUpdate={onUpdate} onDelete={onDelete} />
 }

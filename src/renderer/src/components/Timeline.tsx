@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Project, Segment, VideoSegment, LibraryClip } from '../types'
+import { Project, Segment, VideoSegment, LibraryClip, LibraryAudio, Track } from '../types'
 
 const LABEL_W = 88
 const TRACK_H = 44
@@ -85,9 +85,11 @@ interface TimelineProps {
   onSeek: (t: number) => void
   onSelectSegment: (id: string | null) => void
   onUpdateSegment: (id: string, patch: Partial<Segment>) => void
+  onUpdateTrack: (trackId: string, patch: Partial<Track>) => void
   onDuplicateSegment: (trackId: string, segment: Segment) => void
   onDropVideo: (filePath: string) => void
   onDropLibraryClip: (clip: LibraryClip, timeUs: number) => void
+  onDropLibraryAudio: (audio: LibraryAudio, timeUs: number) => void
   onZoomChange: (zoom: number) => void
   onMoveSegmentToNewTrack: (fromTrackId: string, segId: string) => void
   onMoveSegmentBetweenTracks: (fromTrackId: string, segId: string, toTrackId: string) => void
@@ -110,7 +112,7 @@ function getRulerInterval(zoom: number): { major: number; minor: number } {
 // ── Timeline ───────────────────────────────────────────────────────────────
 export default function Timeline({
   project, currentTimeSec, selectedId, zoom,
-  onSeek, onSelectSegment, onUpdateSegment, onDuplicateSegment, onDropVideo, onDropLibraryClip,
+  onSeek, onSelectSegment, onUpdateSegment, onUpdateTrack, onDuplicateSegment, onDropVideo, onDropLibraryClip, onDropLibraryAudio,
   onZoomChange, onMoveSegmentToNewTrack, onMoveSegmentBetweenTracks, onPackBaseTrack
 }: TimelineProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -321,17 +323,37 @@ export default function Timeline({
       e.preventDefault()
       setDropActive(false)
 
+      const rect = el.getBoundingClientRect()
+      const scrollLeft = el.scrollLeft
+      const rawX = e.clientX - rect.left + scrollLeft - LABEL_W
+      const timeUs = Math.max(0, Math.round((rawX / zoom) * 1e6))
+
+      // Check if it's an audio drop
+      const audioId = e.dataTransfer?.getData('audioId')
+      const audioPath = e.dataTransfer?.getData('audioPath')
+      console.log('[Timeline] Drop - audioId:', audioId, 'audioPath:', audioPath)
+
+      if (audioId && audioPath) {
+        console.log('[Timeline] Fetching audio library...')
+        // Fetch audio metadata and create segment
+        window.api.getAudioLibrary().then((audios) => {
+          console.log('[Timeline] Got audio library:', audios.length, 'items')
+          const audio = audios.find((a) => a.id === audioId)
+          console.log('[Timeline] Found audio:', audio)
+          if (audio) {
+            console.log('[Timeline] Dropping audio at', timeUs, 'us')
+            onDropLibraryAudio(audio, timeUs)
+          }
+        })
+        return
+      }
+
       // Check if it's a library clip
       const clipId = e.dataTransfer?.getData('clipId')
       const clipPath = e.dataTransfer?.getData('clipPath')
 
       if (clipId && clipPath) {
         // Library clip drop - calculate drop position
-        const rect = el.getBoundingClientRect()
-        const scrollLeft = el.scrollLeft
-        const rawX = e.clientX - rect.left + scrollLeft - LABEL_W
-        const timeUs = Math.max(0, Math.round((rawX / zoom) * 1e6))
-
         // Fetch clip metadata and create segment
         window.api.getClipLibrary().then((clips) => {
           const clip = clips.find((c) => c.id === clipId)
@@ -349,7 +371,7 @@ export default function Timeline({
       el.removeEventListener('dragleave', onDragLeave)
       el.removeEventListener('drop', onDrop)
     }
-  }, [zoom, onDropLibraryClip])
+  }, [zoom, onDropLibraryClip, onDropLibraryAudio])
 
   // ── Ruler mousedown (seek) ────────────────────────────────────────────────
   const handleRulerMouseDown = (e: React.MouseEvent) => {
@@ -484,18 +506,30 @@ export default function Timeline({
           return (
             <div
               key={track.id}
-              className={`track-row${isBase ? ' track-row-base' : ''}`}
+              className={`track-row${isBase ? ' track-row-base' : ''}${track.muted ? ' track-muted' : ''}`}
               style={{ height: TRACK_H }}
             >
               <div className="track-label" style={{ width: LABEL_W, height: TRACK_H }}>
-                {track.label}
+                <span className="track-label-text">{track.label}</span>
+                {(track.type === 'video' || track.type === 'audio') && (
+                  <button
+                    className="track-mute-btn"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onUpdateTrack(track.id, { muted: !track.muted })
+                    }}
+                    title={track.muted ? 'Unmute track' : 'Mute track'}
+                  >
+                    {track.muted ? 'M' : 'M'}
+                  </button>
+                )}
               </div>
               <div className="track-segments" style={{ position: 'relative', height: TRACK_H }}>
                 {track.segments.map((seg) => {
                   const left = seg.startUs / 1e6 * zoom
                   const width = Math.max(8, seg.durationUs / 1e6 * zoom)
                   const isSelected = seg.id === selectedId
-                  const label = seg.type === 'video' ? (seg as any).name : (seg as any).text
+                  const label = seg.type === 'video' ? (seg as any).name : seg.type === 'audio' ? (seg as any).name : (seg as any).text
                   // Highlight if this seg is being dragged to this row
                   const isLiveDragged = seg.id === dragSegId && track.id === dragVisualTrackId
                   return (
@@ -511,6 +545,15 @@ export default function Timeline({
                         onMouseDown={(e) => handleSegmentMouseDown(e, seg, track.id, 'resize-left')}
                       />
                       <span className="segment-label">{label}</span>
+                      {seg.type === 'audio' && (seg as any).dropTimeUs && (
+                        <div
+                          className="audio-drop-marker"
+                          style={{
+                            left: `${((((seg as any).dropTimeUs - seg.sourceStartUs) / seg.sourceDurationUs) * 100)}%`
+                          }}
+                          title="Drop point"
+                        />
+                      )}
                       <div
                         className="resize-handle resize-handle-right"
                         onMouseDown={(e) => handleSegmentMouseDown(e, seg, track.id, 'resize-right')}

@@ -42,6 +42,12 @@ contextBridge.exposeInMainWorld('api', {
   getClipLibrary: () => ipcRenderer.invoke('get-clip-library'),
   deleteClipFromLibrary: (clipId: string) => ipcRenderer.invoke('delete-clip-from-library', clipId),
   updateClipMetadata: (clipId: string, updates: any) => ipcRenderer.invoke('update-clip-metadata', clipId, updates),
+  // Audio Library
+  selectAudioFile: () => ipcRenderer.invoke('select-audio-file'),
+  importAudio: (sourcePath: string, isVideo: boolean) => ipcRenderer.invoke('import-audio', sourcePath, isVideo),
+  getAudioLibrary: () => ipcRenderer.invoke('get-audio-library'),
+  updateAudioMetadata: (audioId: string, updates: any) => ipcRenderer.invoke('update-audio-metadata', audioId, updates),
+  deleteAudioFromLibrary: (audioId: string) => ipcRenderer.invoke('delete-audio-from-library', audioId),
   // Accounts
   getAccounts: () => ipcRenderer.invoke('get-accounts'),
   createAccount: (name: string) => ipcRenderer.invoke('create-account', name),

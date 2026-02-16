@@ -43,17 +43,33 @@ export interface TextSegment {
   textScale: number       // scale factor from handle drag (1.0 = base)
 }
 
-export type Segment = VideoSegment | TextSegment
+export interface AudioSegment {
+  id: string
+  type: 'audio'
+  src: string          // absolute path
+  name: string
+  startUs: number      // position on timeline (microseconds)
+  durationUs: number   // duration on timeline (microseconds)
+  sourceStartUs: number    // trim: where in source to start
+  sourceDurationUs: number // trim: how much of source to use
+  fileDurationUs: number   // total duration of source file
+  volume: number       // 0-1
+  dropTimeUs?: number  // optional: identified drop point in the audio
+}
+
+export type Segment = VideoSegment | TextSegment | AudioSegment
 
 export interface Track {
   id: string
-  type: 'video' | 'text'
+  type: 'video' | 'text' | 'audio'
   label: string
   segments: Segment[]
+  muted?: boolean  // whether this track's audio is muted
 }
 
 export interface Project {
   name: string
+  accountId?: string  // Account this project was created for
   canvas: { width: number; height: number }
   tracks: Track[]
 }
@@ -91,6 +107,20 @@ export interface LibraryClip {
   subject_visible?: boolean
   subject_position?: string
   setting?: string
+}
+
+export interface LibraryAudio {
+  id: string
+  // No accountId - audios are shared across accounts
+  name: string
+  path: string
+  originalPath: string
+  duration: number
+  imported: string
+  waveformData?: number[]  // Normalized waveform peaks for visualization
+  dropTimeMs?: number      // Identified drop point in milliseconds
+  trimStartMs?: number     // Trimmed start (if cropped)
+  trimEndMs?: number       // Trimmed end (if cropped)
 }
 
 export interface AppState {

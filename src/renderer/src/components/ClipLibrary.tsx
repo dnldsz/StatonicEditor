@@ -201,19 +201,15 @@ export default function ClipLibrary({ onSelectClip, onRefresh, currentAccountId 
       )}
 
       <div className="clip-library-header">
-        <input
-          className="clip-search"
-          type="text"
-          placeholder="Search clips..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        <button className="btn btn-sm" onClick={loadClips} title="Refresh clip library">
-          ↻ Refresh
-        </button>
-        <button className="btn btn-sm" onClick={handleImport} title="Import clip to library">
-          + Import
-        </button>
+        <h3 className="clip-library-title">Clip Library</h3>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <button className="library-refresh-btn" onClick={loadClips} title="Refresh clip library">
+            ↻
+          </button>
+          <button className="btn btn-sm" onClick={handleImport} title="Import clip to library">
+            + Import
+          </button>
+        </div>
       </div>
 
       {claudeFilter && (

@@ -1,5 +1,5 @@
 import React, { RefObject, useCallback, useEffect, useRef, useState } from 'react'
-import { Project, Segment, TextSegment, VideoSegment, ScaleKeyframe } from '../types'
+import { Project, Segment, TextSegment, VideoSegment, AudioSegment, ScaleKeyframe } from '../types'
 
 function getInterpolatedScale(seg: VideoSegment, timeWithinSegMs: number): number {
   if (!seg.scaleKeyframes || seg.scaleKeyframes.length === 0) {
@@ -110,6 +110,8 @@ export default function Canvas({
   const cropDragRef = useRef<CropDragState | null>(null)
   const cropPanDragRef = useRef<CropPanDragState | null>(null)
   const overlayVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map())
+  const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map())
+  const audioSrcMap = useRef<Map<string, string>>(new Map())
   // x/y = CSS percentage for where to draw the guide line, null = no guide
   const [snapGuide, setSnapGuide] = useState<{ x: number | null; y: number | null }>({ x: null, y: null })
   const [previewSize, setPreviewSize] = useState({ w: 0, h: 0 })
@@ -136,7 +138,9 @@ export default function Canvas({
   // ── find segments at current time ─────────────────────────────────────────
 
   let baseVideoSeg: VideoSegment | null = null
-  const overlayVideoSegs: VideoSegment[] = []
+  let baseTrackMuted = false
+  const overlayVideoSegs: Array<{ seg: VideoSegment; muted: boolean }> = []
+  const audioSegs: Array<{ seg: AudioSegment; muted: boolean }> = []
   const visibleTexts: Array<{ seg: TextSegment; z: number }> = []
 
   for (let ti = 0; ti < project.tracks.length; ti++) {
@@ -147,8 +151,13 @@ export default function Canvas({
       const end = (seg.startUs + seg.durationUs) / 1e6
       if (currentTimeSec < start || currentTimeSec >= end) continue
       if (seg.type === 'video') {
-        if (ti === 0) baseVideoSeg = seg as VideoSegment
-        else overlayVideoSegs.push(seg as VideoSegment)
+        if (ti === 0) {
+          baseVideoSeg = seg as VideoSegment
+          baseTrackMuted = track.muted ?? false
+        }
+        else overlayVideoSegs.push({ seg: seg as VideoSegment, muted: track.muted ?? false })
+      } else if (seg.type === 'audio') {
+        audioSegs.push({ seg: seg as AudioSegment, muted: track.muted ?? false })
       } else if (seg.type === 'text') {
         visibleTexts.push({ seg: seg as TextSegment, z })
       }
@@ -159,11 +168,13 @@ export default function Canvas({
 
   // Run on every render so overlay videos stay in sync with currentTimeSec and isPlaying
   useEffect(() => {
-    for (const seg of overlayVideoSegs) {
+    for (const { seg, muted } of overlayVideoSegs) {
       const el = overlayVideoRefs.current.get(seg.id)
       if (!el) continue
       const videoSrc = pathToFileUrl(seg.src)
       const targetTime = seg.sourceStartUs / 1e6 + (currentTimeSec - seg.startUs / 1e6)
+      // Apply mute state
+      el.muted = muted
       if (el.src !== videoSrc) {
         el.src = videoSrc
         el.currentTime = targetTime
@@ -180,7 +191,67 @@ export default function Canvas({
     }
     // Pause any overlay that's no longer visible
     for (const [id, el] of overlayVideoRefs.current) {
-      if (!overlayVideoSegs.find((s) => s.id === id) && !el.paused) el.pause()
+      if (!overlayVideoSegs.find((s) => s.seg.id === id) && !el.paused) el.pause()
+    }
+  })
+
+  // ── sync audio segments ────────────────────────────────────────────────────
+
+  useEffect(() => {
+    console.log('[Canvas] Syncing audio segments:', audioSegs.length, 'isPlaying:', isPlaying)
+    for (const { seg, muted } of audioSegs) {
+      let el = audioRefs.current.get(seg.id)
+      if (!el) {
+        el = document.createElement('audio')
+        el.preload = 'auto'
+        audioRefs.current.set(seg.id, el)
+        console.log('[Canvas] Created audio element for:', seg.name)
+      }
+      const audioSrc = seg.src
+      const targetTime = seg.sourceStartUs / 1e6 + (currentTimeSec - seg.startUs / 1e6)
+      el.muted = muted
+      el.volume = seg.volume ?? 1
+
+      console.log('[Canvas] Audio:', seg.name, 'muted:', muted, 'volume:', el.volume, 'targetTime:', targetTime)
+
+      const loadedSrc = audioSrcMap.current.get(seg.id)
+      if (loadedSrc !== audioSrc) {
+        console.log('[Canvas] Setting audio src:', audioSrc)
+        el.src = `file://${audioSrc}`
+        audioSrcMap.current.set(seg.id, audioSrc)
+        el.currentTime = targetTime
+        if (isPlaying) {
+          console.log('[Canvas] Playing audio:', seg.name)
+          el.play().catch((err) => console.error('[Canvas] Failed to play audio:', err))
+        }
+        continue
+      }
+      if (isPlaying) {
+        if (el.paused) {
+          el.currentTime = targetTime
+          console.log('[Canvas] Resuming audio:', seg.name)
+          el.play().catch((err) => console.error('[Canvas] Failed to resume audio:', err))
+        }
+        else if (Math.abs(el.currentTime - targetTime) > 0.3) {
+          console.log('[Canvas] Seeking audio:', seg.name, 'to', targetTime)
+          el.currentTime = targetTime
+        }
+      } else {
+        if (!el.paused) {
+          console.log('[Canvas] Pausing audio:', seg.name)
+          el.pause()
+        }
+        el.currentTime = targetTime
+      }
+    }
+    // Pause any audio that's no longer visible
+    for (const [id, el] of audioRefs.current) {
+      if (!audioSegs.find((s) => s.seg.id === id)) {
+        if (!el.paused) {
+          console.log('[Canvas] Stopping audio:', id)
+          el.pause()
+        }
+      }
     }
   })
 
@@ -589,8 +660,9 @@ export default function Canvas({
       style={{
         aspectRatio: `${canvas.width} / ${canvas.height}`,
         maxHeight: '100%',
-        maxWidth: `calc(100% * ${aspect})`,
-        width: 'auto', height: '100%',
+        maxWidth: '100%',
+        height: '100%',
+        width: 'auto',
         position: 'relative',
         // overflow:visible so scale handles at canvas edges are not clipped
         overflow: 'visible',
@@ -611,12 +683,13 @@ export default function Canvas({
           style={{ width: '100%', height: '100%', display: 'block', objectFit: 'fill' }}
           playsInline
           preload="auto"
+          muted={baseTrackMuted}
         />,
         1
       )}
 
       {/* Overlay videos (tracks 1+) — synced by this component */}
-      {overlayVideoSegs.map((seg, i) => renderVideoSeg(
+      {overlayVideoSegs.map(({ seg, muted }, i) => renderVideoSeg(
         seg,
         <video
           ref={(el: HTMLVideoElement | null) => {
@@ -626,6 +699,7 @@ export default function Canvas({
           style={{ width: '100%', height: '100%', display: 'block', objectFit: 'fill' }}
           playsInline
           preload="auto"
+          muted={muted}
         />,
         i + 2
       ))}
