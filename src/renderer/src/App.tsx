@@ -86,7 +86,7 @@ function totalDuration(project: Project): number {
 const defaultProject: Project = {
   name: 'Untitled Project',
   canvas: { width: 1080, height: 1920 },
-  tracks: [{ id: uid(), type: 'video', label: 'VIDEO', segments: [] }]
+  tracks: [{ id: uid(), type: 'video', label: 'VIDEO', segments: [], muted: true }]
 }
 
 const initialState: AppState = {
@@ -705,7 +705,7 @@ export default function App(): JSX.Element {
 
   const handleNewProject = useCallback(() => {
     if (!confirm('Start a new project? Unsaved changes will be lost.')) return
-    dispatch({ type: 'SET_PROJECT', project: { ...defaultProject, accountId: state.currentAccountId || undefined, tracks: [{ id: uid(), type: 'video', label: 'VIDEO', segments: [] }] } })
+    dispatch({ type: 'SET_PROJECT', project: { ...defaultProject, accountId: state.currentAccountId || undefined, tracks: [{ id: uid(), type: 'video', label: 'VIDEO', segments: [], muted: true }] } })
     dispatch({ type: 'SET_FILE_PATH', path: null })
   }, [state.currentAccountId])
 
