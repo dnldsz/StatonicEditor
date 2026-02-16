@@ -341,7 +341,7 @@ ipcMain.handle('open-video', async () => {
   })
 })
 
-ipcMain.handle('save-project', async (_event, project: any, thumbnailDataUrl?: string) => {
+ipcMain.handle('save-project', async (_event, project: any, thumbnailDataUrl?: string, existingFilePath?: string | null) => {
   try {
     // Get account ID from project
     const accountId = project.accountId
@@ -355,9 +355,14 @@ ipcMain.handle('save-project', async (_event, project: any, thumbnailDataUrl?: s
       mkdirSync(projectsDir, { recursive: true })
     }
 
-    // Save project to account-specific directory
-    const fileName = `${project.name ?? 'untitled'}.json`.replace(/[/\\?%*:|"<>]/g, '-')
-    const filePath = join(projectsDir, fileName)
+    // Use existing file path if provided, otherwise generate from project name
+    let filePath: string
+    if (existingFilePath && existsSync(existingFilePath)) {
+      filePath = existingFilePath
+    } else {
+      const fileName = `${project.name ?? 'untitled'}.json`.replace(/[/\\?%*:|"<>]/g, '-')
+      filePath = join(projectsDir, fileName)
+    }
 
     writeFileSync(filePath, JSON.stringify(project, null, 2))
     watchProjectFile(filePath)

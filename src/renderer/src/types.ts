@@ -126,6 +126,7 @@ export interface LibraryAudio {
 export interface AppState {
   mode: 'single' | 'batch'
   project: Project
+  currentFilePath: string | null  // Track the current open file path
   batchFolder: string | null
   batchProjects: BatchProject[]
   batchSelectedIdx: number
@@ -154,6 +155,7 @@ export type Action =
   | { type: 'REDO' }
   // ── project load ─────────────────────────────────────────────────────────
   | { type: 'SET_PROJECT'; project: Project }
+  | { type: 'SET_FILE_PATH'; path: string | null }
   // ── batch mode ───────────────────────────────────────────────────────────
   | { type: 'SET_BATCH'; folderPath: string; projects: BatchProject[] }
   | { type: 'SELECT_BATCH_PROJECT'; idx: number }

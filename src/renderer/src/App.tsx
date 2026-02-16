@@ -92,6 +92,7 @@ const defaultProject: Project = {
 const initialState: AppState = {
   mode: 'single',
   project: defaultProject,
+  currentFilePath: null,
   batchFolder: null,
   batchProjects: [],
   batchSelectedIdx: 0,
@@ -324,6 +325,11 @@ function reducer(state: AppState, action: Action): AppState {
     return { ...state, project: action.project, past: [], future: [], currentTimeSec: 0, selectedId: null }
   }
 
+  // set file path
+  if (action.type === 'SET_FILE_PATH') {
+    return { ...state, currentFilePath: action.path }
+  }
+
   // batch mode
   if (action.type === 'SET_BATCH') {
     const firstProject = action.projects[0]?.project ?? defaultProject
@@ -502,7 +508,7 @@ export default function App(): JSX.Element {
   const stateRef = useRef(state)
   stateRef.current = state
 
-  const { project, currentTimeSec, selectedId, croppingId, zoom, isPlaying, past, future, accounts, currentAccountId } = state
+  const { project, currentFilePath, currentTimeSec, selectedId, croppingId, zoom, isPlaying, past, future, accounts, currentAccountId } = state
 
   // ── seek logic ──────────────────────────────────────────────────────────────
 
@@ -700,6 +706,7 @@ export default function App(): JSX.Element {
   const handleNewProject = useCallback(() => {
     if (!confirm('Start a new project? Unsaved changes will be lost.')) return
     dispatch({ type: 'SET_PROJECT', project: { ...defaultProject, accountId: state.currentAccountId || undefined, tracks: [{ id: uid(), type: 'video', label: 'VIDEO', segments: [] }] } })
+    dispatch({ type: 'SET_FILE_PATH', path: null })
   }, [state.currentAccountId])
 
   const handleOpenProject = useCallback(() => {
@@ -725,6 +732,7 @@ export default function App(): JSX.Element {
       dispatch({ type: 'SET_CURRENT_ACCOUNT', accountId: project.accountId })
     }
     dispatch({ type: 'SET_PROJECT', project })
+    dispatch({ type: 'SET_FILE_PATH', path: filePath })
     dispatch({ type: 'EXIT_BATCH' })
   }, [])
 
@@ -765,9 +773,13 @@ export default function App(): JSX.Element {
       console.error('Failed to generate thumbnail:', err)
     }
 
-    await window.api.saveProject(project, thumbnailDataUrl)
+    const result = await window.api.saveProject(project, thumbnailDataUrl, currentFilePath)
+    // Update file path if this was a new save
+    if (result.filePath && result.filePath !== currentFilePath) {
+      dispatch({ type: 'SET_FILE_PATH', path: result.filePath })
+    }
     setLastSavedTime(new Date())
-  }, [project])
+  }, [project, currentFilePath])
 
   // Auto-save on project changes (debounced)
   useEffect(() => {
