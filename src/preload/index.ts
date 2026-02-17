@@ -55,5 +55,7 @@ contextBridge.exposeInMainWorld('api', {
   getAccounts: () => ipcRenderer.invoke('get-accounts'),
   createAccount: (name: string) => ipcRenderer.invoke('create-account', name),
   updateAccount: (accountId: string, updates: any) => ipcRenderer.invoke('update-account', accountId, updates),
-  setCurrentAccount: (accountId: string | null) => ipcRenderer.invoke('set-current-account', accountId)
+  setCurrentAccount: (accountId: string | null) => ipcRenderer.invoke('set-current-account', accountId),
+  // Reference video analysis
+  analyzeReferenceVideo: (videoPath: string) => ipcRenderer.invoke('analyze-reference-video', videoPath)
 })

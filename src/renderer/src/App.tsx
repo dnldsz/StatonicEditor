@@ -7,6 +7,7 @@ import PropertiesPanel from './components/PropertiesPanel'
 import ClipLibrary from './components/ClipLibrary'
 import { AudioLibrary } from './components/AudioLibrary'
 import { ProjectPicker } from './components/ProjectPicker'
+import { ReferenceVideoModal } from './components/ReferenceVideoModal'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -456,6 +457,7 @@ declare global {
       getAudioLibrary: () => Promise<LibraryAudio[]>
       updateAudioMetadata: (audioId: string, updates: Partial<LibraryAudio>) => Promise<{ ok?: boolean; audio?: LibraryAudio; error?: string }>
       deleteAudioFromLibrary: (audioId: string) => Promise<{ ok?: boolean; error?: string }>
+      analyzeReferenceVideo: (videoPath: string) => Promise<Array<{ startSec: number; durationSec: number; thumbnailPath: string; detectedText: string; clipType: 'hook' | 'gizmo' | 'showcase'; description: string }>>
     }
   }
 }
@@ -1057,6 +1059,7 @@ export default function App(): JSX.Element {
 
   const [showClipLibrary, setShowClipLibrary] = useState(true)
   const [showProjectPicker, setShowProjectPicker] = useState(false)
+  const [showReferenceModal, setShowReferenceModal] = useState(false)
 
   const handleSelectClip = useCallback(async (clip: LibraryClip) => {
     // Preview clip in canvas or add to timeline
@@ -1242,6 +1245,7 @@ export default function App(): JSX.Element {
             <div className="playback-bar-left">
               <button className="btn" onClick={handleAddVideo} title="Add video clip">+ Video</button>
               <button className="btn" onClick={handleAddText} title="Add text overlay">+ Text</button>
+              <button className="btn" onClick={() => setShowReferenceModal(true)} title="Copy structure from a reference video">Copy Reference</button>
             </div>
             <div className="playback-bar-center">
               <span className="playback-time">{formatTimestamp(currentTimeSec)}</span>
@@ -1328,6 +1332,17 @@ export default function App(): JSX.Element {
           accountId={currentAccountId}
           onSelect={handleSelectProject}
           onClose={() => setShowProjectPicker(false)}
+        />
+      )}
+
+      {/* Reference Video Modal */}
+      {showReferenceModal && (
+        <ReferenceVideoModal
+          onClose={() => setShowReferenceModal(false)}
+          onCreateProject={(newProject) => {
+            dispatch({ type: 'SET_PROJECT', project: newProject })
+            setShowReferenceModal(false)
+          }}
         />
       )}
     </div>

@@ -2,9 +2,10 @@ import { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, Menu } from 'e
 import { join, extname, basename } from 'path'
 import { readFileSync, writeFileSync, watch, readdirSync, existsSync, mkdirSync, copyFileSync, rmSync, statSync } from 'fs'
 import type { FSWatcher } from 'fs'
-import { spawn } from 'child_process'
+import { spawn, spawnSync } from 'child_process'
 import { tmpdir } from 'os'
 import { randomBytes } from 'crypto'
+import Anthropic from '@anthropic-ai/sdk'
 
 // Use PNG for dock (more reliable in dev than .icns)
 const ICON_PATH = join(__dirname, '../../resources/icon.png')
@@ -1317,4 +1318,133 @@ ipcMain.handle('set-current-account', async (_event, accountId: string | null) =
   }, null, 2))
 
   return { ok: true }
+})
+
+// ── Reference video analysis ────────────────────────────────────────────────
+
+interface ReferenceSlot {
+  startSec: number
+  durationSec: number
+  thumbnailPath: string
+  detectedText: string
+  clipType: 'hook' | 'gizmo' | 'showcase'
+  description: string
+}
+
+ipcMain.handle('analyze-reference-video', async (_event, videoPath: string): Promise<ReferenceSlot[]> => {
+  if (!existsSync(videoPath)) throw new Error(`Video not found: ${videoPath}`)
+
+  // Get video duration
+  const probeResult = spawnSync('ffprobe', [
+    '-v', 'quiet', '-print_format', 'json', '-show_streams', videoPath
+  ], { encoding: 'utf-8' })
+  if (probeResult.status !== 0) throw new Error('ffprobe failed')
+  const probeJson = JSON.parse(probeResult.stdout)
+  const videoStream = probeJson.streams?.find((s: any) => s.codec_type === 'video')
+  const totalDuration = parseFloat(videoStream?.duration ?? '10')
+
+  // Scene detection: extract timestamps where scene changes occur
+  const sceneDetectResult = spawnSync('ffmpeg', [
+    '-i', videoPath,
+    '-filter:v', 'select=gt(scene\\,0.3),showinfo',
+    '-f', 'null', '-'
+  ], { encoding: 'utf-8', stdio: 'pipe' })
+
+  // Parse scene timestamps from stderr
+  const sceneTimestamps: number[] = [0]
+  const sceneRegex = /pts_time:([\d.]+)/g
+  const stderr = sceneDetectResult.stderr || ''
+  let match
+  while ((match = sceneRegex.exec(stderr)) !== null) {
+    const t = parseFloat(match[1])
+    if (t > 0.5) sceneTimestamps.push(t)
+  }
+  sceneTimestamps.sort((a, b) => a - b)
+
+  // Build scenes array: each scene is from its timestamp to the next (or end)
+  const scenes: Array<{ startSec: number; endSec: number }> = sceneTimestamps.map((t, i) => ({
+    startSec: t,
+    endSec: sceneTimestamps[i + 1] ?? totalDuration,
+  })).filter(s => s.endSec - s.startSec > 0.2) // filter out tiny scenes
+
+  // If no scenes detected, create one scene for the whole video
+  if (scenes.length === 0) {
+    scenes.push({ startSec: 0, endSec: totalDuration })
+  }
+
+  // Extract midpoint keyframe for each scene (up to 8 scenes)
+  const tmpFrames: Array<{ scene: typeof scenes[0]; framePath: string; b64: string }> = []
+  for (const scene of scenes.slice(0, 8)) {
+    const midSec = (scene.startSec + scene.endSec) / 2
+    const framePath = join(tmpdir(), `ref_frame_${randomBytes(4).toString('hex')}.jpg`)
+    const extractResult = spawnSync('ffmpeg', [
+      '-ss', String(midSec),
+      '-i', videoPath,
+      '-vframes', '1',
+      '-q:v', '3',
+      '-vf', 'scale=640:-1',
+      framePath, '-y',
+    ], { stdio: 'pipe' })
+    if (extractResult.status === 0 && existsSync(framePath)) {
+      const b64 = readFileSync(framePath).toString('base64')
+      tmpFrames.push({ scene, framePath, b64 })
+    }
+  }
+
+  if (tmpFrames.length === 0) throw new Error('Could not extract any frames from reference video')
+
+  // Call Claude vision to analyze all frames at once
+  const anthropic = new Anthropic()
+  const analysisContent: any[] = [
+    {
+      type: 'text',
+      text: `Analyze these frames from a TikTok/Reels video. For each frame (in order), identify:
+1. What text is visible on screen (exact text, with \\n for line breaks)
+2. Clip type: "hook" (stressed student, person looking at camera, anxiety face), "gizmo" (quiz app, flashcard app, study tool UI), or "showcase" (person studying calmly, reading, writing)
+3. Brief description of what's shown
+
+Return a JSON array with one object per frame (${tmpFrames.length} frames):
+[{"detectedText": "text or empty string", "clipType": "hook|gizmo|showcase", "description": "brief description"}, ...]
+Only output the JSON array.`
+    },
+    ...tmpFrames.map((f, i) => ([
+      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: f.b64 } },
+      { type: 'text', text: `Frame ${i + 1} (${f.scene.startSec.toFixed(1)}s–${f.scene.endSec.toFixed(1)}s)` },
+    ])).flat(),
+  ]
+
+  const response = await anthropic.messages.create({
+    model: 'claude-opus-4-6',
+    max_tokens: 1024,
+    messages: [{ role: 'user', content: analysisContent }],
+  })
+
+  const rawText = response.content[0].type === 'text' ? response.content[0].text.trim() : '[]'
+  let analyses: Array<{ detectedText: string; clipType: 'hook' | 'gizmo' | 'showcase'; description: string }> = []
+  try {
+    const jsonMatch = rawText.match(/\[[\s\S]*\]/)
+    analyses = jsonMatch ? JSON.parse(jsonMatch[0]) : []
+  } catch {
+    analyses = []
+  }
+
+  // Cleanup temp frames
+  for (const f of tmpFrames) {
+    try { spawnSync('rm', ['-f', f.framePath]) } catch {}
+  }
+
+  // Build result slots
+  const slots: ReferenceSlot[] = tmpFrames.map((f, i) => {
+    const analysis = analyses[i] ?? { detectedText: '', clipType: 'showcase', description: '' }
+    return {
+      startSec: f.scene.startSec,
+      durationSec: f.scene.endSec - f.scene.startSec,
+      thumbnailPath: f.framePath,
+      detectedText: analysis.detectedText || '',
+      clipType: (['hook', 'gizmo', 'showcase'].includes(analysis.clipType) ? analysis.clipType : 'showcase') as 'hook' | 'gizmo' | 'showcase',
+      description: analysis.description || '',
+    }
+  })
+
+  return slots
 })
