@@ -134,7 +134,6 @@ export function ReferenceVideoModal({ onClose, onCreateProject, currentAccountId
   }
 
   function handleCreateProject(): void {
-    console.log('[handleCreateProject] slots:', slots.length, 'spanningTexts:', spanningTexts)
     const videoTrack: Track = { id: uid(), type: 'video', label: 'VIDEO', segments: [] }
     const textTrack: Track = { id: uid(), type: 'text', label: 'TEXT', segments: [] }
     // Separate track for persistent/spanning text (different layer)
@@ -179,16 +178,13 @@ export function ReferenceVideoModal({ onClose, onCreateProject, currentAccountId
     }
 
     // Add spanning text segments to the persistent text track (separate layer)
-    console.log('[handleCreateProject] spanningTexts loop, count:', spanningTexts.length)
     for (const st of spanningTexts) {
       const fromSlot = slots[st.fromSlot]
       const toSlot = slots[Math.min(st.toSlot, slots.length - 1)]
-      console.log('[handleCreateProject] spanning st:', st, 'fromSlot:', fromSlot, 'toSlot:', toSlot)
       if (!fromSlot || !toSlot) continue
       const startUs = Math.round(fromSlot.startSec * 1e6)
       const endUs = Math.round((toSlot.startSec + toSlot.durationSec) * 1e6)
       const text = st.textOverride ?? st.text
-      console.log('[handleCreateProject] spanning text:', text, 'startUs:', startUs, 'endUs:', endUs)
       if (text) {
         persistentTextTrack.segments.push({
           id: uid(), type: 'text', text,
@@ -203,7 +199,6 @@ export function ReferenceVideoModal({ onClose, onCreateProject, currentAccountId
     }
 
     const tracks = [videoTrack, textTrack, persistentTextTrack].filter(t => t.segments.length > 0)
-    console.log('[handleCreateProject] tracks:', tracks.map(t => `${t.label}(${t.segments.length} segs)`))
     const project: Project = {
       name: projectName,
       accountId: currentAccountId ?? undefined,
