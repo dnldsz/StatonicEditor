@@ -151,6 +151,10 @@ export function VariationsPanel({ project, clips: _clips, onOpenVariation, onClo
                   variation={v}
                   isRendering={rendering.has(v.path)}
                   onClick={() => onOpenVariation(v)}
+                  onDelete={() => {
+                    window.api.deleteProject(v.path).catch(() => {})
+                    setVariations(prev => prev.filter(x => x.path !== v.path))
+                  }}
                 />
               ))}
             </div>
@@ -161,10 +165,11 @@ export function VariationsPanel({ project, clips: _clips, onOpenVariation, onClo
   )
 }
 
-function VariationCard({ variation, isRendering, onClick }: {
+function VariationCard({ variation, isRendering, onClick, onDelete }: {
   variation: VariationEntry
   isRendering: boolean
   onClick: () => void
+  onDelete: () => void
 }): JSX.Element {
   const [hovered, setHovered] = useState(false)
   const anatomy = buildAnatomy(variation.project)
@@ -180,8 +185,23 @@ function VariationCard({ variation, isRendering, onClick }: {
         borderRadius: 8, overflow: 'hidden', cursor: 'pointer',
         transform: hovered ? 'translateY(-2px)' : 'none',
         transition: 'border-color 0.15s, transform 0.12s',
+        position: 'relative',
       }}
     >
+      {hovered && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onDelete() }}
+          style={{
+            position: 'absolute', top: 6, right: 6, zIndex: 10,
+            background: 'rgba(0,0,0,0.7)', border: '1px solid #555',
+            color: '#ccc', borderRadius: 4, width: 22, height: 22,
+            fontSize: 13, lineHeight: 1, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          ×
+        </button>
+      )}
       {/* Thumbnail */}
       <div style={{ width: '100%', aspectRatio: '9/16', background: '#111', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
         {variation.thumbnail
