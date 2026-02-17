@@ -13,6 +13,7 @@ interface Props {
   clips: LibraryClip[]
   onOpenVariation: (v: VariationEntry) => void
   onClose: () => void
+  projectName: string
 }
 
 function buildAnatomy(p: Project): Array<{ slotLabel: string; clipName: string; text: string }> {
@@ -44,7 +45,7 @@ function buildAnatomy(p: Project): Array<{ slotLabel: string; clipName: string; 
   })
 }
 
-export function VariationsPanel({ project, clips: _clips, onOpenVariation, onClose }: Props): JSX.Element {
+export function VariationsPanel({ project, clips: _clips, onOpenVariation, onClose, projectName }: Props): JSX.Element {
   const [variations, setVariations] = useState<VariationEntry[]>([])
   const [rendering, setRendering] = useState<Set<string>>(new Set())
   const anatomy = buildAnatomy(project)
@@ -79,10 +80,11 @@ export function VariationsPanel({ project, clips: _clips, onOpenVariation, onClo
       <div style={{
         height: 48, flexShrink: 0,
         background: '#1e1e1e', borderBottom: '1px solid #2a2a2a',
-        display: 'flex', alignItems: 'center', padding: '0 20px', gap: 16,
+        display: 'flex', alignItems: 'center',
+        padding: '0 20px 0 160px', gap: 16,
       }}>
-        <span style={{ fontSize: 13, color: '#888', fontStyle: 'italic', flex: 1 }}>
-          Tell Claude Code what variations to make — e.g. "make variations for biology, maths and physics"
+        <span style={{ fontSize: 15, fontWeight: 600, color: '#ddd', flex: 1 }}>
+          {projectName} <span style={{ color: '#555', fontWeight: 400 }}>variations</span>
         </span>
         <button
           onClick={onClose}

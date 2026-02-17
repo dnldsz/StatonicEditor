@@ -1470,6 +1470,7 @@ export default function App(): JSX.Element {
         <VariationsPanel
           project={project}
           clips={[]}
+          projectName={project.name}
           onOpenVariation={handleOpenVariation}
           onClose={handleExitVariations}
         />
