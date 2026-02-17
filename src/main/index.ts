@@ -149,45 +149,48 @@ function postProcessReferenceResult(raw: any): any {
   let slots: any[] = raw.slots ?? []
   let spanning_texts: any[] = raw.spanning_texts ?? []
 
-  // ── 1. Merge all pre-technique slots into exactly one hook slot ────────────
-  const firstTechIdx = slots.findIndex((s: any) => s.detectedText && s.detectedText.trim())
-  if (firstTechIdx > 1) {
-    const preTech = slots.slice(0, firstTechIdx)
-    const techSlots = slots.slice(firstTechIdx)
-    const hookEnd = techSlots[0].startSec
-    const hookSpan = spanning_texts.find((st: any) => st.fromSlot === 0)
-    const hookText = hookSpan?.text ?? preTech.find((s: any) => s.detectedText?.trim())?.detectedText ?? ''
-    slots = [
-      { ...preTech[0], startSec: 0, durationSec: hookEnd, clipType: 'hook', detectedText: hookText },
-      ...techSlots,
-    ]
-    spanning_texts = spanning_texts.filter((st: any) => st.fromSlot !== 0)
+  // ── 1. Merge leading slots with identical detectedText into one hook slot ──
+  // Handles two cases:
+  //   a) Claude writes hook text correctly — 3 slots all with "how to study BIOLOGY..."
+  //   b) Claude writes empty hook slots — 3 slots all with ""
+  // In both cases, merge consecutive identical-text slots at the start.
+  if (slots.length > 1) {
+    const hookText = slots[0].detectedText?.trim() ?? ''
+    let hookEnd = 1
+    while (hookEnd < slots.length && (slots[hookEnd].detectedText?.trim() ?? '') === hookText) {
+      hookEnd++
+    }
+    if (hookEnd > 1) {
+      const nextStart = slots[hookEnd]?.startSec ?? (slots[hookEnd - 1].startSec + slots[hookEnd - 1].durationSec)
+      slots = [
+        { ...slots[0], startSec: 0, durationSec: nextStart, clipType: 'hook', detectedText: hookText },
+        ...slots.slice(hookEnd),
+      ]
+    }
   }
   if (slots.length > 0) slots[0] = { ...slots[0], clipType: 'hook' }
 
-  // ── 2. Move hook spanning_text into slot 0's detectedText ──────────────────
+  // ── 2. Move hook spanning_text into slot 0's detectedText (if Claude used spanning_texts) ──
   const hookSpan = spanning_texts.find((st: any) => st.fromSlot === 0)
   if (hookSpan && !slots[0]?.detectedText?.trim()) {
     slots[0] = { ...slots[0], detectedText: hookSpan.text }
     spanning_texts = spanning_texts.filter((st: any) => st !== hookSpan)
   }
 
-  // ── 3. Auto-extract spanning text from common leading lines ──────────────
-  // Handles case where Claude writes full text in each slot instead of using spanning_texts.
-  // e.g. "Students who follow\nme and use:\n\nGAMIFICATION" → spanning = "Students who follow\nme and use:"
+  // ── 3. Auto-extract technique spanning text from common leading lines ──────
+  // e.g. all technique slots start with "Students who follow\nme and use:\n\nGAMIFICATION"
+  // → extract "Students who follow\nme and use:" as spanning_text, leave "GAMIFICATION" in each slot
   if (spanning_texts.length === 0) {
-    const techIdxs = slots.map((s: any, i: number) => i).filter(i => i > 0 && slots[i].detectedText?.trim())
+    const techIdxs = slots.map((_: any, i: number) => i).filter((i: number) => i > 0 && slots[i].detectedText?.trim())
     if (techIdxs.length > 1) {
-      const splitLines = techIdxs.map(i => (slots[i].detectedText as string).split('\n'))
-      // Count how many leading lines are identical across all technique slots
+      const splitLines = techIdxs.map((i: number) => (slots[i].detectedText as string).split('\n'))
       let commonCount = 0
-      const minLen = Math.min(...splitLines.map(l => l.length))
+      const minLen = Math.min(...splitLines.map((l: string[]) => l.length))
       for (let li = 0; li < minLen; li++) {
-        if (splitLines.every(lines => lines[li] === splitLines[0][li])) commonCount++
+        if (splitLines.every((lines: string[]) => lines[li] === splitLines[0][li])) commonCount++
         else break
       }
-      // Extract only if there's at least 1 common line AND each slot still has unique text after
-      if (commonCount > 0 && splitLines.every(lines => lines.slice(commonCount).join('').trim())) {
+      if (commonCount > 0 && splitLines.every((lines: string[]) => lines.slice(commonCount).join('').trim())) {
         const spanText = splitLines[0].slice(0, commonCount).join('\n').trim()
         if (spanText) {
           spanning_texts = [{ text: spanText, fromSlot: techIdxs[0], toSlot: techIdxs[techIdxs.length - 1] }]
