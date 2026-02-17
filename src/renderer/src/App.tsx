@@ -1235,7 +1235,6 @@ export default function App(): JSX.Element {
         zoom={zoom}
         onZoomChange={(z) => dispatch({ type: 'SET_ZOOM', zoom: z })}
         onExport={handleExport}
-        onVariations={handleEnterVariations}
         projectName={project.name}
         onRenameProject={(name) => dispatch({ type: 'SET_PROJECT', project: { ...project, name } })}
         canUndo={past.length > 0}
@@ -1339,7 +1338,9 @@ export default function App(): JSX.Element {
                 >⏭</button>
               </div>
             </div>
-            <div className="playback-bar-right"></div>
+            <div className="playback-bar-right">
+              <button className="btn" onClick={handleEnterVariations} title="Create variations of this project">Variations</button>
+            </div>
           </div>
         </div>
 
