@@ -1418,6 +1418,24 @@ ipcMain.handle('set-current-account', async (_event, accountId: string | null) =
   return { ok: true }
 })
 
+// ── Reference video: download from URL (Instagram reels, TikTok, etc.) ──────
+ipcMain.handle('download-reference-video', async (_event, url: string): Promise<{ path: string }> => {
+  const YTDlpWrap = (await import('yt-dlp-wrap')).default
+  const ytDlp = new YTDlpWrap()
+
+  // Auto-download yt-dlp binary if not present
+  const binPath = join(app.getPath('userData'), 'yt-dlp')
+  if (!existsSync(binPath)) {
+    await YTDlpWrap.downloadFromGithub(binPath)
+  }
+  const ytDlpWithBin = new YTDlpWrap(binPath)
+
+  const outPath = join(tmpdir(), `statonic_ref_${randomBytes(4).toString('hex')}.mp4`)
+  await ytDlpWithBin.execPromise([url, '-o', outPath, '--merge-output-format', 'mp4', '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'])
+  if (!existsSync(outPath)) throw new Error('Download failed — file not found after yt-dlp')
+  return { path: outPath }
+})
+
 // ── Reference video: extract frames for Claude Code analysis ─────────────────
 // Claude Code (via MCP tools get_reference_frames + write_reference_result)
 // handles the vision analysis and writes back reference-result.json.

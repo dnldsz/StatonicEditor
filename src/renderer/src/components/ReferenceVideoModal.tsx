@@ -146,6 +146,8 @@ export function ReferenceVideoModal({ onClose, onCreateProject, currentAccountId
   const [frameCount, setFrameCount] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [urlInput, setUrlInput] = useState('')
+  const [downloading, setDownloading] = useState(false)
   const clipsRef = useRef<LibraryClip[]>([])
   const accountIdRef = useRef<string | null>(null)
 
@@ -187,6 +189,25 @@ export function ReferenceVideoModal({ onClose, onCreateProject, currentAccountId
     if (!result) return
     const videoPath = (result as any).path
     if (!videoPath) return
+    await extractFromPath(videoPath)
+  }
+
+  async function handleUrlDownload(): Promise<void> {
+    const url = urlInput.trim()
+    if (!url) return
+    setError(null)
+    setDownloading(true)
+    try {
+      const { path: videoPath } = await (window.api as any).downloadReferenceVideo(url)
+      await extractFromPath(videoPath)
+    } catch (err: any) {
+      setError(err?.message ?? String(err))
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  async function extractFromPath(videoPath: string): Promise<void> {
     setError(null)
     setStep('extracting')
     try {
@@ -218,17 +239,57 @@ export function ReferenceVideoModal({ onClose, onCreateProject, currentAccountId
 
         <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
           {step === 'pick' && (
-            <div style={{ textAlign: 'center', padding: '40px 0' }}>
-              <p style={{ color: '#888', marginBottom: 24 }}>
-                Select a reference video. Claude Code will analyze it and create the project automatically.
-              </p>
-              {error && <p style={{ color: '#e05252', marginBottom: 16, fontSize: 13 }}>{error}</p>}
-              <button
-                onClick={handlePickVideo}
-                style={{ background: '#2a6ee0', color: '#fff', border: 'none', borderRadius: 6, padding: '10px 24px', fontSize: 14, cursor: 'pointer' }}
-              >
-                Select Reference Video
-              </button>
+            <div style={{ padding: '32px 0' }}>
+              {error && <p style={{ color: '#e05252', marginBottom: 16, fontSize: 13, textAlign: 'center' }}>{error}</p>}
+
+              {/* URL input */}
+              <div style={{ marginBottom: 24 }}>
+                <p style={{ color: '#888', fontSize: 13, marginBottom: 10 }}>Paste an Instagram, TikTok, or YouTube link:</p>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    type="text"
+                    value={urlInput}
+                    onChange={e => setUrlInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleUrlDownload() }}
+                    placeholder="https://www.instagram.com/reel/..."
+                    disabled={downloading}
+                    style={{
+                      flex: 1, background: '#111', border: '1px solid #444', borderRadius: 6,
+                      padding: '9px 12px', color: '#ddd', fontSize: 13, outline: 'none',
+                    }}
+                  />
+                  <button
+                    onClick={handleUrlDownload}
+                    disabled={downloading || !urlInput.trim()}
+                    style={{
+                      background: downloading || !urlInput.trim() ? '#222' : '#2a6ee0',
+                      color: downloading || !urlInput.trim() ? '#555' : '#fff',
+                      border: 'none', borderRadius: 6, padding: '9px 18px',
+                      fontSize: 13, cursor: downloading || !urlInput.trim() ? 'default' : 'pointer',
+                      whiteSpace: 'nowrap', flexShrink: 0,
+                    }}
+                  >
+                    {downloading ? 'Downloading...' : 'Download'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Divider */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
+                <div style={{ flex: 1, height: 1, background: '#333' }} />
+                <span style={{ color: '#555', fontSize: 12 }}>or</span>
+                <div style={{ flex: 1, height: 1, background: '#333' }} />
+              </div>
+
+              {/* File picker */}
+              <div style={{ textAlign: 'center' }}>
+                <button
+                  onClick={handlePickVideo}
+                  style={{ background: '#2a2a2a', color: '#ccc', border: '1px solid #444', borderRadius: 6, padding: '10px 24px', fontSize: 14, cursor: 'pointer' }}
+                >
+                  Select File
+                </button>
+              </div>
             </div>
           )}
 
