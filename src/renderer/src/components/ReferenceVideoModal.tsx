@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { LibraryClip, Project, VideoSegment, TextSegment, Track } from '../types'
 
 export interface ReferenceSlot {
@@ -37,16 +37,39 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
   const [projectName, setProjectName] = useState('Reference Copy')
   const [clips, setClips] = useState<LibraryClip[]>([])
   const [spanningTexts, setSpanningTexts] = useState<SpanningText[]>([])
+  const [copied, setCopied] = useState(false)
+  // Keep a stable ref so the result handler always sees the latest clips
+  const clipsRef = useRef<LibraryClip[]>([])
+  useEffect(() => { clipsRef.current = clips }, [clips])
 
   useEffect(() => {
     window.api.getClipLibrary().then(setClips).catch(() => {})
   }, [])
 
+  // Round-robin auto-assign clips by category
+  function autoAssign(rawSlots: ReferenceSlot[], availableClips: LibraryClip[]): ReferenceSlot[] {
+    const byCategory: Record<string, LibraryClip[]> = {}
+    for (const clip of availableClips) {
+      const cat = clip.category || 'uncategorized'
+      if (!byCategory[cat]) byCategory[cat] = []
+      byCategory[cat].push(clip)
+    }
+    const cursor: Record<string, number> = {}
+    return rawSlots.map(slot => {
+      const pool = byCategory[slot.clipType] ?? byCategory['uncategorized'] ?? []
+      if (pool.length === 0) return slot
+      const idx = (cursor[slot.clipType] ?? 0) % pool.length
+      cursor[slot.clipType] = idx + 1
+      return { ...slot, assignedClipId: pool[idx].id }
+    })
+  }
+
   // Listen for Claude's analysis result arriving via the file watcher
   useEffect(() => {
     const unsub = window.api.onReferenceResultReady((result: { slots: ReferenceSlot[]; spanning_texts?: SpanningText[] }) => {
       if (result?.slots?.length) {
-        setSlots(result.slots.map(s => ({ ...s, textOverride: s.detectedText })))
+        const withText = result.slots.map(s => ({ ...s, textOverride: s.detectedText }))
+        setSlots(autoAssign(withText, clipsRef.current))
         setSpanningTexts((result.spanning_texts ?? []).map(st => ({ ...st, textOverride: st.text })))
         setStep('edit')
       }
@@ -232,12 +255,31 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
                 <p style={{ color: '#aaa', fontSize: 13, marginBottom: 12, fontWeight: 600 }}>
                   In Claude Code, say:
                 </p>
-                <div style={{
-                  background: '#111', borderRadius: 6, padding: '10px 14px',
-                  fontFamily: 'monospace', fontSize: 13, color: '#7ec8e3',
-                  userSelect: 'all',
-                }}>
-                  analyze the reference video frames and write the result
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{
+                    flex: 1, background: '#111', borderRadius: 6, padding: '10px 14px',
+                    fontFamily: 'monospace', fontSize: 13, color: '#7ec8e3',
+                    userSelect: 'all',
+                  }}>
+                    analyze the reference video frames and write the result
+                  </div>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText('analyze the reference video frames and write the result')
+                      setCopied(true)
+                      setTimeout(() => setCopied(false), 2000)
+                    }}
+                    style={{
+                      background: copied ? '#2a4a2a' : '#2a2a2a',
+                      border: `1px solid ${copied ? '#52c07a' : '#444'}`,
+                      color: copied ? '#52c07a' : '#aaa',
+                      borderRadius: 6, padding: '8px 12px',
+                      cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {copied ? '✓ Copied' : 'Copy'}
+                  </button>
                 </div>
                 <p style={{ color: '#555', fontSize: 12, marginTop: 12 }}>
                   Claude will call <code style={{ color: '#888' }}>get_reference_frames</code> to view the scenes,
