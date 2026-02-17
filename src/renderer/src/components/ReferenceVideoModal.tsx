@@ -12,6 +12,13 @@ export interface ReferenceSlot {
   textOverride?: string
 }
 
+interface SpanningText {
+  text: string
+  fromSlot: number
+  toSlot: number
+  textOverride?: string
+}
+
 interface Props {
   onClose: () => void
   onCreateProject: (project: Project) => void
@@ -29,6 +36,7 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
   const [selectedSlotIdx, setSelectedSlotIdx] = useState(0)
   const [projectName, setProjectName] = useState('Reference Copy')
   const [clips, setClips] = useState<LibraryClip[]>([])
+  const [spanningTexts, setSpanningTexts] = useState<SpanningText[]>([])
 
   useEffect(() => {
     window.api.getClipLibrary().then(setClips).catch(() => {})
@@ -36,9 +44,10 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
 
   // Listen for Claude's analysis result arriving via the file watcher
   useEffect(() => {
-    const unsub = window.api.onReferenceResultReady((result: { slots: ReferenceSlot[] }) => {
+    const unsub = window.api.onReferenceResultReady((result: { slots: ReferenceSlot[]; spanning_texts?: SpanningText[] }) => {
       if (result?.slots?.length) {
         setSlots(result.slots.map(s => ({ ...s, textOverride: s.detectedText })))
+        setSpanningTexts((result.spanning_texts ?? []).map(st => ({ ...st, textOverride: st.text })))
         setStep('edit')
       }
     })
@@ -71,7 +80,14 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
     const videoTrack: Track = { id: uid(), type: 'video', label: 'VIDEO', segments: [] }
     const textTrack: Track = { id: uid(), type: 'text', label: 'TEXT', segments: [] }
 
-    for (const slot of slots) {
+    // Build set of slot indices covered by a spanning text so we skip per-slot text for them
+    const coveredBySpan = new Set<number>()
+    for (const st of spanningTexts) {
+      for (let i = st.fromSlot; i <= st.toSlot; i++) coveredBySpan.add(i)
+    }
+
+    for (let si = 0; si < slots.length; si++) {
+      const slot = slots[si]
       const startUs = Math.round(slot.startSec * 1e6)
       const durationUs = Math.round(slot.durationSec * 1e6)
 
@@ -93,18 +109,41 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
         }
       }
 
-      const text = slot.textOverride ?? slot.detectedText
+      // Only add per-slot text if not covered by a spanning text
+      if (!coveredBySpan.has(si)) {
+        const text = slot.textOverride ?? slot.detectedText
+        if (text) {
+          textTrack.segments.push({
+            id: uid(), type: 'text', text,
+            startUs, durationUs,
+            x: 0, y: 0.28,
+            fontSize: 85, color: '#ffffff',
+            bold: false, italic: false,
+            strokeEnabled: true, strokeColor: '#000000',
+            textAlign: 'center', textScale: 1,
+          } as TextSegment)
+        }
+      }
+    }
+
+    // Add spanning text segments (one per spanning text, spanning combined duration)
+    for (const st of spanningTexts) {
+      const fromSlot = slots[st.fromSlot]
+      const toSlot = slots[Math.min(st.toSlot, slots.length - 1)]
+      if (!fromSlot || !toSlot) continue
+      const startUs = Math.round(fromSlot.startSec * 1e6)
+      const endUs = Math.round((toSlot.startSec + toSlot.durationSec) * 1e6)
+      const text = st.textOverride ?? st.text
       if (text) {
-        const seg: TextSegment = {
+        textTrack.segments.push({
           id: uid(), type: 'text', text,
-          startUs, durationUs,
+          startUs, durationUs: endUs - startUs,
           x: 0, y: 0.28,
           fontSize: 85, color: '#ffffff',
           bold: false, italic: false,
-          strokeEnabled: false, strokeColor: '#000000',
+          strokeEnabled: true, strokeColor: '#000000',
           textAlign: 'center', textScale: 1,
-        }
-        textTrack.segments.push(seg)
+        } as TextSegment)
       }
     }
 
@@ -213,33 +252,76 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
           {step === 'edit' && slots.length > 0 && (
             <>
               {/* Slot strip */}
-              <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
-                {slots.map((slot, idx) => (
-                  <div
-                    key={idx}
-                    onClick={() => setSelectedSlotIdx(idx)}
-                    style={{
-                      border: `2px solid ${idx === selectedSlotIdx ? '#2a6ee0' : '#333'}`,
-                      borderRadius: 6, padding: '6px 10px', cursor: 'pointer',
-                      background: idx === selectedSlotIdx ? '#1e2d4a' : '#222',
-                      minWidth: 80,
-                    }}
-                  >
-                    <div style={{
-                      fontSize: 10, color: clipTypeColor[slot.clipType] ?? '#888',
-                      textTransform: 'uppercase', fontWeight: 600, marginBottom: 2,
-                    }}>
-                      {slot.clipType}
-                    </div>
-                    <div style={{ fontSize: 11, color: '#aaa' }}>
-                      {slot.startSec.toFixed(1)}s · {slot.durationSec.toFixed(1)}s
-                    </div>
-                    {slot.assignedClipId && (
-                      <div style={{ fontSize: 10, color: '#52c07a', marginTop: 2 }}>✓ clip</div>
-                    )}
+              {(() => {
+                const coveredBySpan = new Set<number>()
+                for (const st of spanningTexts) {
+                  for (let i = st.fromSlot; i <= st.toSlot; i++) coveredBySpan.add(i)
+                }
+                return (
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+                    {slots.map((slot, idx) => (
+                      <div
+                        key={idx}
+                        onClick={() => setSelectedSlotIdx(idx)}
+                        style={{
+                          border: `2px solid ${idx === selectedSlotIdx ? '#2a6ee0' : '#333'}`,
+                          borderRadius: 6, padding: '6px 10px', cursor: 'pointer',
+                          background: idx === selectedSlotIdx ? '#1e2d4a' : '#222',
+                          minWidth: 80,
+                        }}
+                      >
+                        <div style={{
+                          fontSize: 10, color: clipTypeColor[slot.clipType] ?? '#888',
+                          textTransform: 'uppercase', fontWeight: 600, marginBottom: 2,
+                        }}>
+                          {slot.clipType}
+                        </div>
+                        <div style={{ fontSize: 11, color: '#aaa' }}>
+                          {slot.startSec.toFixed(1)}s · {slot.durationSec.toFixed(1)}s
+                        </div>
+                        {coveredBySpan.has(idx) && (
+                          <div style={{ fontSize: 9, color: '#52c07a', marginTop: 2 }}>↔ text</div>
+                        )}
+                        {slot.assignedClipId && (
+                          <div style={{ fontSize: 10, color: '#52c07a', marginTop: 1 }}>✓ clip</div>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                )
+              })()}
+
+              {/* Spanning / persistent texts */}
+              {spanningTexts.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 11, color: '#888', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>
+                    Persistent text (spans multiple clips)
+                  </div>
+                  {spanningTexts.map((st, i) => {
+                    const fromSlot = slots[st.fromSlot]
+                    const toSlot = slots[Math.min(st.toSlot, slots.length - 1)]
+                    const startLabel = fromSlot ? fromSlot.startSec.toFixed(1) + 's' : '?'
+                    const endLabel = toSlot ? (toSlot.startSec + toSlot.durationSec).toFixed(1) + 's' : '?'
+                    return (
+                      <div key={i} style={{ background: '#1e2a1e', border: '1px solid #2a4a2a', borderRadius: 8, padding: 12, marginBottom: 8 }}>
+                        <div style={{ fontSize: 11, color: '#52c07a', marginBottom: 6 }}>
+                          slots {st.fromSlot + 1}–{st.toSlot + 1} &nbsp;·&nbsp; {startLabel} → {endLabel}
+                        </div>
+                        <textarea
+                          value={st.textOverride ?? st.text}
+                          onChange={e => setSpanningTexts(prev => prev.map((s, j) => j === i ? { ...s, textOverride: e.target.value } : s))}
+                          rows={3}
+                          style={{
+                            width: '100%', background: '#111', border: '1px solid #2a4a2a',
+                            borderRadius: 4, color: '#ddd', padding: '6px 8px', fontSize: 13,
+                            resize: 'vertical', boxSizing: 'border-box',
+                          }}
+                        />
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
 
               {/* Selected slot details */}
               {selectedSlot && (
