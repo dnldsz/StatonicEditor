@@ -1351,7 +1351,7 @@ ipcMain.handle('set-current-account', async (_event, accountId: string | null) =
 // Claude Code (via MCP tools get_reference_frames + write_reference_result)
 // handles the vision analysis and writes back reference-result.json.
 
-ipcMain.handle('extract-reference-frames', async (_event, videoPath: string): Promise<{ ok: boolean; sceneCount: number }> => {
+ipcMain.handle('extract-reference-frames', async (_event, videoPath: string): Promise<{ ok: boolean; frameCount: number; totalDuration: number }> => {
   if (!existsSync(videoPath)) throw new Error(`Video not found: ${videoPath}`)
 
   // Get video duration
@@ -1363,58 +1363,41 @@ ipcMain.handle('extract-reference-frames', async (_event, videoPath: string): Pr
   const videoStream = probeJson.streams?.find((s: any) => s.codec_type === 'video')
   const totalDuration = parseFloat(videoStream?.duration ?? '10')
 
-  // Scene detection
-  const sceneDetectResult = spawnSync('ffmpeg', [
-    '-i', videoPath,
-    '-filter:v', 'select=gt(scene\\,0.3),showinfo',
-    '-f', 'null', '-'
-  ], { encoding: 'utf-8', stdio: 'pipe' })
-
-  const sceneTimestamps: number[] = [0]
-  const sceneRegex = /pts_time:([\d.]+)/g
-  const stderr = sceneDetectResult.stderr || ''
-  let match
-  while ((match = sceneRegex.exec(stderr)) !== null) {
-    const t = parseFloat(match[1])
-    if (t > 0.5) sceneTimestamps.push(t)
+  // Sample one frame every 0.5s — Claude groups by text, not by visual cut.
+  // This avoids splitting mid-hook just because the background clip changes.
+  const INTERVAL = 0.5
+  const timestamps: number[] = []
+  for (let t = 0; t < totalDuration; t += INTERVAL) {
+    timestamps.push(parseFloat(t.toFixed(2)))
   }
-  sceneTimestamps.sort((a, b) => a - b)
 
-  const scenes: Array<{ startSec: number; endSec: number }> = sceneTimestamps.map((t, i) => ({
-    startSec: t,
-    endSec: sceneTimestamps[i + 1] ?? totalDuration,
-  })).filter(s => s.endSec - s.startSec > 0.2)
-
-  if (scenes.length === 0) scenes.push({ startSec: 0, endSec: totalDuration })
-
-  // Extract midpoint keyframe per scene — save to a persistent temp dir so MCP can read them
   const frameDir = join(tmpdir(), `statonic_ref_${randomBytes(4).toString('hex')}`)
   mkdirSync(frameDir, { recursive: true })
 
-  const extractedScenes: Array<{ startSec: number; endSec: number; framePath: string }> = []
-  for (const scene of scenes.slice(0, 8)) {
-    const midSec = (scene.startSec + scene.endSec) / 2
-    const framePath = join(frameDir, `scene_${extractedScenes.length}.jpg`)
+  const frames: Array<{ timeSec: number; framePath: string }> = []
+  for (const t of timestamps) {
+    const framePath = join(frameDir, `frame_${frames.length.toString().padStart(3, '0')}.jpg`)
     const r = spawnSync('ffmpeg', [
-      '-ss', String(midSec),
+      '-ss', String(t),
       '-i', videoPath,
-      '-vframes', '1', '-q:v', '3', '-vf', 'scale=640:-1',
+      '-vframes', '1', '-q:v', '4', '-vf', 'scale=480:-1',
       framePath, '-y',
     ], { stdio: 'pipe' })
     if (r.status === 0 && existsSync(framePath)) {
-      extractedScenes.push({ startSec: scene.startSec, endSec: scene.endSec, framePath })
+      frames.push({ timeSec: t, framePath })
     }
   }
 
-  if (extractedScenes.length === 0) throw new Error('Could not extract any frames from reference video')
+  if (frames.length === 0) throw new Error('Could not extract any frames from reference video')
 
   // Write reference-request.json for MCP to read
   const requestFile = join(app.getPath('appData'), 'Statonic', 'reference-request.json')
   writeFileSync(requestFile, JSON.stringify({
     requestedAt: new Date().toISOString(),
     videoPath,
-    scenes: extractedScenes,
+    totalDuration,
+    frames,
   }, null, 2))
 
-  return { ok: true, sceneCount: extractedScenes.length }
+  return { ok: true, frameCount: frames.length, totalDuration }
 })

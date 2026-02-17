@@ -23,7 +23,7 @@ function uid(): string {
 
 export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.Element {
   const [step, setStep] = useState<'pick' | 'extracting' | 'waiting' | 'edit'>('pick')
-  const [sceneCount, setSceneCount] = useState(0)
+  const [frameCount, setFrameCount] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [slots, setSlots] = useState<ReferenceSlot[]>([])
   const [selectedSlotIdx, setSelectedSlotIdx] = useState(0)
@@ -54,8 +54,8 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
     setError(null)
     setStep('extracting')
     try {
-      const { sceneCount: n } = await window.api.extractReferenceFrames(videoPath)
-      setSceneCount(n)
+      const { frameCount: n } = await window.api.extractReferenceFrames(videoPath)
+      setFrameCount(n)
       setStep('waiting')
     } catch (err: any) {
       setError(err?.message ?? String(err))
@@ -181,7 +181,7 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
               <div style={{ textAlign: 'center', marginBottom: 28 }}>
                 <div style={{ fontSize: 28, marginBottom: 12 }}>✅</div>
                 <p style={{ color: '#ccc', fontSize: 15, marginBottom: 4 }}>
-                  {sceneCount} scene{sceneCount !== 1 ? 's' : ''} extracted
+                  {frameCount} frames extracted
                 </p>
                 <p style={{ color: '#666', fontSize: 13 }}>Waiting for Claude Code to analyze the frames...</p>
               </div>
