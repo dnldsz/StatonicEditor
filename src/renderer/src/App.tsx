@@ -1075,6 +1075,7 @@ export default function App(): JSX.Element {
   const [variationsMode, setVariationsMode] = useState(false)
   const [variationsFolder, setVariationsFolder] = useState<string | null>(null)
   const [editingVariation, setEditingVariation] = useState<string | null>(null)
+  const savedAccountRef = useRef<string | null>(null)
 
   const handleSelectClip = useCallback(async (clip: LibraryClip) => {
     // Preview clip in canvas or add to timeline
@@ -1089,6 +1090,7 @@ export default function App(): JSX.Element {
       alert('Save your project first before creating variations.')
       return
     }
+    savedAccountRef.current = currentAccountId  // remember current account
     const allClips = await window.api.getClipLibrary()
     const clips = currentAccountId ? allClips.filter((c) => c.accountId === currentAccountId) : allClips
     const result = await (window.api as any).startVariationsSession({
@@ -1100,13 +1102,17 @@ export default function App(): JSX.Element {
       setVariationsFolder(result.variationsFolder)
       setVariationsMode(true)
     }
-  }, [state.currentFilePath, project])
+  }, [state.currentFilePath, project, currentAccountId])
 
   const handleExitVariations = useCallback(() => {
     setVariationsMode(false)
     setVariationsFolder(null)
-    setEditingVariation(null);
-    (window.api as any).stopVariationsSession()
+    setEditingVariation(null)
+    // Restore account in case Claude switched it via write_statonic_project
+    if (savedAccountRef.current !== null) {
+      dispatch({ type: 'SET_CURRENT_ACCOUNT', accountId: savedAccountRef.current })
+    }
+    ;(window.api as any).stopVariationsSession()
   }, [])
 
   const handleOpenVariation = useCallback((v: VariationEntry) => {
@@ -1211,7 +1217,11 @@ export default function App(): JSX.Element {
           display: 'flex', alignItems: 'center', gap: 14, padding: '0 16px',
         }}>
           <button
-            onClick={() => { setVariationsMode(true); setEditingVariation(null) }}
+            onClick={() => {
+              setVariationsMode(true)
+              setEditingVariation(null)
+              if (savedAccountRef.current !== null) dispatch({ type: 'SET_CURRENT_ACCOUNT', accountId: savedAccountRef.current })
+            }}
             style={{
               background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.15)',
               color: '#fde68a', borderRadius: 5, padding: '3px 10px',

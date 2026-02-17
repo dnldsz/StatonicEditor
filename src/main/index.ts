@@ -237,22 +237,32 @@ function startReferenceResultWatcher(): void {
 
 function startVariationsFolderWatcher(folderPath: string): void {
   if (variationsWatcher) { variationsWatcher.close(); variationsWatcher = null }
-  const perFileTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  try {
-    variationsWatcher = watch(folderPath, (_, filename) => {
-      if (!filename?.endsWith('.json')) return
-      const existing = perFileTimers.get(filename)
-      if (existing) clearTimeout(existing)
-      perFileTimers.set(filename, setTimeout(() => {
-        perFileTimers.delete(filename)
+  // Track sent files so we don't re-send on subsequent watch events
+  const sentFiles = new Set<string>()
+  let scanTimer: ReturnType<typeof setTimeout> | null = null
+
+  const scanFolder = () => {
+    try {
+      const files = readdirSync(folderPath).filter(f => f.endsWith('.json'))
+      for (const filename of files) {
+        if (sentFiles.has(filename)) continue
+        const fullPath = join(folderPath, filename)
         try {
-          const fullPath = join(folderPath, filename)
-          if (!existsSync(fullPath)) return
           const project = JSON.parse(readFileSync(fullPath, 'utf-8'))
           const name = filename.replace(/\.json$/, '')
+          sentFiles.add(filename)
           mainWin?.webContents.send('variation-added', { name, path: fullPath, project })
-        } catch { /* ignore mid-write */ }
-      }, 200))
+        } catch { /* mid-write, will pick up on next scan */ }
+      }
+    } catch { /* ignore */ }
+  }
+
+  try {
+    // macOS FSEvents may batch multiple rapid writes into one event,
+    // so scan the whole folder on any change rather than tracking per-file
+    variationsWatcher = watch(folderPath, () => {
+      if (scanTimer) clearTimeout(scanTimer)
+      scanTimer = setTimeout(scanFolder, 300)
     })
   } catch (err) {
     console.error('Failed to watch variations folder:', err)
