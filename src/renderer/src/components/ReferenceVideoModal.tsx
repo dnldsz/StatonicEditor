@@ -139,12 +139,6 @@ export function ReferenceVideoModal({ onClose, onCreateProject, currentAccountId
     // Separate track for persistent/spanning text (different layer)
     const persistentTextTrack: Track = { id: uid(), type: 'text', label: 'PERSISTENT TEXT', segments: [] }
 
-    // Build set of slot indices covered by a spanning text so we skip per-slot text for them
-    const coveredBySpan = new Set<number>()
-    for (const st of spanningTexts) {
-      for (let i = st.fromSlot; i <= st.toSlot; i++) coveredBySpan.add(i)
-    }
-
     for (let si = 0; si < slots.length; si++) {
       const slot = slots[si]
       const startUs = Math.round(slot.startSec * 1e6)
@@ -168,20 +162,18 @@ export function ReferenceVideoModal({ onClose, onCreateProject, currentAccountId
         }
       }
 
-      // Only add per-slot text if not covered by a spanning text
-      if (!coveredBySpan.has(si)) {
-        const text = slot.textOverride ?? slot.detectedText
-        if (text) {
-          textTrack.segments.push({
-            id: uid(), type: 'text', text,
-            startUs, durationUs,
-            x: 0, y: 0.28,
-            fontSize: 85, color: '#ffffff',
-            bold: false, italic: false,
-            strokeEnabled: true, strokeColor: '#000000',
-            textAlign: 'center', textScale: 1,
-          } as TextSegment)
-        }
+      // Always add per-slot text — spanning text is a separate additional track, not a replacement
+      const text = slot.textOverride ?? slot.detectedText
+      if (text) {
+        textTrack.segments.push({
+          id: uid(), type: 'text', text,
+          startUs, durationUs,
+          x: 0, y: 0.28,
+          fontSize: 85, color: '#ffffff',
+          bold: false, italic: false,
+          strokeEnabled: true, strokeColor: '#000000',
+          textAlign: 'center', textScale: 1,
+        } as TextSegment)
       }
     }
 
