@@ -172,6 +172,35 @@ function postProcessReferenceResult(raw: any): any {
     spanning_texts = spanning_texts.filter((st: any) => st !== hookSpan)
   }
 
+  // ── 3. Auto-extract spanning text from common leading lines ──────────────
+  // Handles case where Claude writes full text in each slot instead of using spanning_texts.
+  // e.g. "Students who follow\nme and use:\n\nGAMIFICATION" → spanning = "Students who follow\nme and use:"
+  if (spanning_texts.length === 0) {
+    const techIdxs = slots.map((s: any, i: number) => i).filter(i => i > 0 && slots[i].detectedText?.trim())
+    if (techIdxs.length > 1) {
+      const splitLines = techIdxs.map(i => (slots[i].detectedText as string).split('\n'))
+      // Count how many leading lines are identical across all technique slots
+      let commonCount = 0
+      const minLen = Math.min(...splitLines.map(l => l.length))
+      for (let li = 0; li < minLen; li++) {
+        if (splitLines.every(lines => lines[li] === splitLines[0][li])) commonCount++
+        else break
+      }
+      // Extract only if there's at least 1 common line AND each slot still has unique text after
+      if (commonCount > 0 && splitLines.every(lines => lines.slice(commonCount).join('').trim())) {
+        const spanText = splitLines[0].slice(0, commonCount).join('\n').trim()
+        if (spanText) {
+          spanning_texts = [{ text: spanText, fromSlot: techIdxs[0], toSlot: techIdxs[techIdxs.length - 1] }]
+          slots = slots.map((s: any, i: number) => {
+            if (!techIdxs.includes(i)) return s
+            const lines = (s.detectedText as string).split('\n')
+            return { ...s, detectedText: lines.slice(commonCount).join('\n').trim() }
+          })
+        }
+      }
+    }
+  }
+
   return { ...raw, slots, spanning_texts }
 }
 
