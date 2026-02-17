@@ -1420,8 +1420,9 @@ ipcMain.handle('set-current-account', async (_event, accountId: string | null) =
 
 // ── Reference video: download from URL (Instagram reels, TikTok, etc.) ──────
 ipcMain.handle('download-reference-video', async (_event, url: string): Promise<{ path: string }> => {
-  const YTDlpWrap = (await import('yt-dlp-wrap')).default
-  const ytDlp = new YTDlpWrap()
+  // yt-dlp-wrap is CJS — .default may be double-wrapped depending on bundler target
+  const mod = await import('yt-dlp-wrap')
+  const YTDlpWrap: any = (mod as any).default?.default ?? (mod as any).default ?? mod
 
   // Auto-download yt-dlp binary if not present
   const binPath = join(app.getPath('userData'), 'yt-dlp')
