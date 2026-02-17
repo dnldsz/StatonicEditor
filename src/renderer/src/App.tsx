@@ -321,9 +321,13 @@ function reducer(state: AppState, action: Action): AppState {
     }
   }
 
-  // project load — clears history
+  // project load — clears history; video tracks always default to muted
   if (action.type === 'SET_PROJECT') {
-    return { ...state, project: action.project, past: [], future: [], currentTimeSec: 0, selectedId: null }
+    const project = {
+      ...action.project,
+      tracks: action.project.tracks.map(t => t.type === 'video' ? { ...t, muted: t.muted ?? true } : t),
+    }
+    return { ...state, project, past: [], future: [], currentTimeSec: 0, selectedId: null }
   }
 
   // set file path
