@@ -36,8 +36,8 @@ export function ReplaceClipModal({ segment, currentAccountId, onReplace, onClose
     >
       <div style={{
         background: '#1c1c1c', border: '1px solid #333',
-        borderRadius: 10, width: 520, maxHeight: '70vh',
-        display: 'flex', flexDirection: 'column', overflow: 'hidden', color: '#ddd',
+        borderRadius: 10, width: 600, height: '80vh',
+        display: 'flex', flexDirection: 'column', color: '#ddd',
       }}>
         {/* Header */}
         <div style={{ padding: '12px 18px', borderBottom: '1px solid #2a2a2a', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -62,7 +62,7 @@ export function ReplaceClipModal({ segment, currentAccountId, onReplace, onClose
         </div>
 
         {/* Clip grid */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: 14, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 14, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, alignContent: 'start' }}>
           {visible.length === 0 && (
             <div style={{ gridColumn: '1/-1', textAlign: 'center', color: '#555', padding: '40px 0', fontSize: 13 }}>
               {clips.length === 0 ? 'No clips in library' : 'No results'}
