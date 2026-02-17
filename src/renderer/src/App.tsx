@@ -443,7 +443,7 @@ declare global {
       getPathForFile: (file: File) => string
       openVideo: () => Promise<{ path: string; name: string; durationSec: number; width: number; height: number } | null>
       getVideoInfo: (filePath: string) => Promise<{ path: string; name: string; durationSec: number; width: number; height: number }>
-      saveProject: (project: Project) => Promise<{ ok?: boolean; cancelled?: boolean; error?: string; filePath?: string }>
+      saveProject: (project: Project, thumbnail?: string | null, existingPath?: string | null) => Promise<{ ok?: boolean; cancelled?: boolean; error?: string; filePath?: string; name?: string }>
       loadProject: () => Promise<Project | { error: string } | null>
       openFolder: () => Promise<{ folderPath: string; projects: Array<{ name: string; path: string; project: Project }> } | null>
       renderThumbnail: (projectPath: string, timeSec?: number) => Promise<string | null>
@@ -1345,9 +1345,16 @@ export default function App(): JSX.Element {
         <ReferenceVideoModal
           currentAccountId={currentAccountId}
           onClose={() => setShowReferenceModal(false)}
-          onCreateProject={(newProject) => {
+          onCreateProject={async (newProject) => {
             dispatch({ type: 'SET_PROJECT', project: newProject })
+            dispatch({ type: 'SET_FILE_PATH', path: null })
             setShowReferenceModal(false)
+            // Save to a new file immediately (auto-increments name if duplicate exists)
+            const result = await window.api.saveProject(newProject, undefined, null)
+            if (result.filePath) {
+              dispatch({ type: 'SET_FILE_PATH', path: result.filePath })
+              if (result.name) dispatch({ type: 'SET_PROJECT', project: { ...newProject, name: result.name } })
+            }
           }}
         />
       )}

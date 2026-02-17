@@ -447,13 +447,20 @@ ipcMain.handle('save-project', async (_event, project: any, thumbnailDataUrl?: s
       mkdirSync(projectsDir, { recursive: true })
     }
 
-    // Use existing file path if provided, otherwise generate from project name
+    // Use existing file path if provided, otherwise generate a unique name from project name
     let filePath: string
     if (existingFilePath && existsSync(existingFilePath)) {
       filePath = existingFilePath
     } else {
-      const fileName = `${project.name ?? 'untitled'}.json`.replace(/[/\\?%*:|"<>]/g, '-')
-      filePath = join(projectsDir, fileName)
+      const baseName = (project.name ?? 'untitled').replace(/[/\\?%*:|"<>]/g, '-')
+      filePath = join(projectsDir, `${baseName}.json`)
+      // Auto-increment if file already exists
+      if (existsSync(filePath)) {
+        let n = 1
+        while (existsSync(join(projectsDir, `${baseName} ${n}.json`))) n++
+        filePath = join(projectsDir, `${baseName} ${n}.json`)
+        project = { ...project, name: `${baseName} ${n}` }
+      }
     }
 
     writeFileSync(filePath, JSON.stringify(project, null, 2))
@@ -469,7 +476,7 @@ ipcMain.handle('save-project', async (_event, project: any, thumbnailDataUrl?: s
     // Save as last opened project
     saveConfig({ lastProjectPath: filePath })
 
-    return { ok: true, filePath }
+    return { ok: true, filePath, name: project.name }
   } catch (err: any) {
     return { error: err.message }
   }
