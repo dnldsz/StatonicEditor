@@ -145,6 +145,52 @@ function startLoadProjectWatcher(): void {
   }
 }
 
+function postProcessReferenceResult(raw: any): any {
+  let slots: any[] = raw.slots ?? []
+  let spanning_texts: any[] = raw.spanning_texts ?? []
+
+  // ── 1. Merge all pre-technique slots into exactly one hook slot ────────────
+  // "Technique slots" = slots with non-empty detectedText (e.g. "GAMIFICATION")
+  // Everything before the first technique slot belongs to the hook.
+  const firstTechIdx = slots.findIndex((s: any) => s.detectedText && s.detectedText.trim())
+  if (firstTechIdx > 1) {
+    const preTech = slots.slice(0, firstTechIdx)
+    const techSlots = slots.slice(firstTechIdx)
+    const hookEnd = techSlots[0].startSec
+    const hookText = preTech.find((s: any) => s.detectedText?.trim())?.detectedText ?? ''
+    slots = [
+      { ...preTech[0], startSec: 0, durationSec: hookEnd, clipType: 'hook', detectedText: hookText },
+      ...techSlots,
+    ]
+  }
+  // Always force slot 0 to be "hook"
+  if (slots.length > 0) slots[0] = { ...slots[0], clipType: 'hook' }
+
+  // ── 2. Auto-extract spanning text from common first line across technique slots ──
+  // If Claude includes "Students who follow me and use:\nGAMIFICATION" in each
+  // technique slot, extract the common first line into spanning_texts.
+  if (spanning_texts.length === 0) {
+    const techSlots = slots.slice(1).filter((s: any) => s.detectedText?.trim())
+    if (techSlots.length > 1) {
+      const firstLines = techSlots.map((s: any) => {
+        const lines = (s.detectedText as string).split('\n')
+        return lines.length >= 2 ? lines[0].trim() : null
+      })
+      const candidate = firstLines[0]
+      if (candidate && firstLines.every(l => l === candidate)) {
+        spanning_texts = [{ text: candidate, fromSlot: 1, toSlot: slots.length - 1 }]
+        slots = slots.map((s: any, i: number) => {
+          if (i === 0) return s
+          const lines = (s.detectedText ?? '').split('\n')
+          return { ...s, detectedText: lines.slice(1).join('\n').trim() }
+        })
+      }
+    }
+  }
+
+  return { ...raw, slots, spanning_texts }
+}
+
 function startReferenceResultWatcher(): void {
   const resultFile = join(app.getPath('appData'), 'Statonic', 'reference-result.json')
   const watchDir = join(app.getPath('appData'), 'Statonic')
@@ -159,7 +205,8 @@ function startReferenceResultWatcher(): void {
       referenceResultDebounce = setTimeout(() => {
         try {
           if (existsSync(resultFile)) {
-            const result = JSON.parse(readFileSync(resultFile, 'utf-8'))
+            const raw = JSON.parse(readFileSync(resultFile, 'utf-8'))
+            const result = postProcessReferenceResult(raw)
             mainWin?.webContents.send('reference-result-ready', result)
           }
         } catch { /* ignore parse errors mid-write */ }
