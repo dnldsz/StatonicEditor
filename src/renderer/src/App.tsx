@@ -1356,12 +1356,10 @@ export default function App(): JSX.Element {
           items={[
             {
               label: 'Adjust Clip',
-              icon: '✂️',
               onClick: () => { setTrimSegment(segContextMenu.seg); setSegContextMenu(null) },
             },
             {
               label: 'Replace Clip',
-              icon: '🔄',
               onClick: () => { setReplaceSegment(segContextMenu.seg); setSegContextMenu(null) },
             },
           ]}
