@@ -81,7 +81,7 @@ export function ReplaceClipModal({ segment, currentAccountId, onReplace, onClose
               onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = clip.id === segment.id ? '#2a5ecc' : 'transparent' }}
             >
               {clip.thumbnail
-                ? <img src={`data:image/jpeg;base64,${clip.thumbnail}`} style={{ width: '100%', aspectRatio: '9/16', objectFit: 'cover', display: 'block' }} />
+                ? <img src={`file://${clip.thumbnail}`} style={{ width: '100%', aspectRatio: '9/16', objectFit: 'cover', display: 'block' }} />
                 : <div style={{ width: '100%', aspectRatio: '9/16', background: '#222', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#555', fontSize: 20 }}>🎬</div>
               }
               <div style={{ padding: '6px 8px' }}>
