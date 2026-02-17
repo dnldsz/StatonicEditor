@@ -1339,6 +1339,7 @@ export default function App(): JSX.Element {
       {/* Reference Video Modal */}
       {showReferenceModal && (
         <ReferenceVideoModal
+          currentAccountId={currentAccountId}
           onClose={() => setShowReferenceModal(false)}
           onCreateProject={(newProject) => {
             dispatch({ type: 'SET_PROJECT', project: newProject })

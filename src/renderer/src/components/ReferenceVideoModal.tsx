@@ -22,13 +22,22 @@ interface SpanningText {
 interface Props {
   onClose: () => void
   onCreateProject: (project: Project) => void
+  currentAccountId: string | null
 }
 
 function uid(): string {
   return Math.random().toString(36).slice(2, 10)
 }
 
-export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.Element {
+/** Score how well a clip matches a slot's text/description */
+function keywordScore(slot: ReferenceSlot, clip: LibraryClip): number {
+  const haystack = [clip.name, clip.description ?? '', ...(clip.tags ?? [])].join(' ').toLowerCase()
+  const needle = [slot.detectedText, slot.description].join(' ').toLowerCase()
+  const words = needle.split(/\s+/).filter(w => w.length > 3)
+  return words.filter(w => haystack.includes(w)).length
+}
+
+export function ReferenceVideoModal({ onClose, onCreateProject, currentAccountId }: Props): JSX.Element {
   const [step, setStep] = useState<'pick' | 'extracting' | 'waiting' | 'edit'>('pick')
   const [frameCount, setFrameCount] = useState(0)
   const [error, setError] = useState<string | null>(null)
@@ -38,29 +47,54 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
   const [clips, setClips] = useState<LibraryClip[]>([])
   const [spanningTexts, setSpanningTexts] = useState<SpanningText[]>([])
   const [copied, setCopied] = useState(false)
-  // Keep a stable ref so the result handler always sees the latest clips
+  // Keep stable refs so the result handler always sees latest state
   const clipsRef = useRef<LibraryClip[]>([])
+  const accountIdRef = useRef<string | null>(null)
   useEffect(() => { clipsRef.current = clips }, [clips])
+  useEffect(() => { accountIdRef.current = currentAccountId }, [currentAccountId])
 
   useEffect(() => {
     window.api.getClipLibrary().then(setClips).catch(() => {})
   }, [])
 
-  // Round-robin auto-assign clips by category
+  /** Auto-assign clips by category + keyword scoring, filtered to current account */
   function autoAssign(rawSlots: ReferenceSlot[], availableClips: LibraryClip[]): ReferenceSlot[] {
+    // Filter to current account only
+    const accountClips = accountIdRef.current
+      ? availableClips.filter(c => c.accountId === accountIdRef.current)
+      : availableClips
+
     const byCategory: Record<string, LibraryClip[]> = {}
-    for (const clip of availableClips) {
+    for (const clip of accountClips) {
       const cat = clip.category || 'uncategorized'
       if (!byCategory[cat]) byCategory[cat] = []
       byCategory[cat].push(clip)
     }
+
+    const usedIds = new Set<string>()
     const cursor: Record<string, number> = {}
+
     return rawSlots.map(slot => {
       const pool = byCategory[slot.clipType] ?? byCategory['uncategorized'] ?? []
       if (pool.length === 0) return slot
-      const idx = (cursor[slot.clipType] ?? 0) % pool.length
-      cursor[slot.clipType] = idx + 1
-      return { ...slot, assignedClipId: pool[idx].id }
+
+      // Score each clip; pick highest-scoring unused clip, then fall back to round-robin
+      const scored = pool.map(clip => ({ clip, score: keywordScore(slot, clip) }))
+      scored.sort((a, b) => b.score - a.score)
+
+      const best = scored.find(({ clip, score }) => score > 0 && !usedIds.has(clip.id))
+      if (best) {
+        usedIds.add(best.clip.id)
+        return { ...slot, assignedClipId: best.clip.id }
+      }
+
+      // Round-robin fallback
+      const available = pool.filter(c => !usedIds.has(c.id))
+      const fallbackPool = available.length > 0 ? available : pool
+      const idx = (cursor[slot.clipType] ?? 0) % fallbackPool.length
+      cursor[slot.clipType] = (cursor[slot.clipType] ?? 0) + 1
+      usedIds.add(fallbackPool[idx].id)
+      return { ...slot, assignedClipId: fallbackPool[idx].id }
     })
   }
 
@@ -102,6 +136,8 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
   function handleCreateProject(): void {
     const videoTrack: Track = { id: uid(), type: 'video', label: 'VIDEO', segments: [] }
     const textTrack: Track = { id: uid(), type: 'text', label: 'TEXT', segments: [] }
+    // Separate track for persistent/spanning text (different layer)
+    const persistentTextTrack: Track = { id: uid(), type: 'text', label: 'PERSISTENT TEXT', segments: [] }
 
     // Build set of slot indices covered by a spanning text so we skip per-slot text for them
     const coveredBySpan = new Set<number>()
@@ -149,7 +185,7 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
       }
     }
 
-    // Add spanning text segments (one per spanning text, spanning combined duration)
+    // Add spanning text segments to the persistent text track (separate layer)
     for (const st of spanningTexts) {
       const fromSlot = slots[st.fromSlot]
       const toSlot = slots[Math.min(st.toSlot, slots.length - 1)]
@@ -158,11 +194,11 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
       const endUs = Math.round((toSlot.startSec + toSlot.durationSec) * 1e6)
       const text = st.textOverride ?? st.text
       if (text) {
-        textTrack.segments.push({
+        persistentTextTrack.segments.push({
           id: uid(), type: 'text', text,
           startUs, durationUs: endUs - startUs,
-          x: 0, y: 0.28,
-          fontSize: 85, color: '#ffffff',
+          x: 0, y: 0.15,
+          fontSize: 75, color: '#ffffff',
           bold: false, italic: false,
           strokeEnabled: true, strokeColor: '#000000',
           textAlign: 'center', textScale: 1,
@@ -172,8 +208,9 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
 
     const project: Project = {
       name: projectName,
+      accountId: currentAccountId ?? undefined,
       canvas: { width: 1080, height: 1920 },
-      tracks: [videoTrack, textTrack].filter(t => t.segments.length > 0),
+      tracks: [videoTrack, textTrack, persistentTextTrack].filter(t => t.segments.length > 0),
     }
 
     onCreateProject(project)
@@ -187,8 +224,11 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
 
   const selectedSlot = slots[selectedSlotIdx]
   const filteredClips = selectedSlot
-    ? clips.filter(c => !c.category || c.category === selectedSlot.clipType || c.category === 'uncategorized' || c.category === '')
-    : clips
+    ? clips.filter(c => {
+        if (currentAccountId && c.accountId !== currentAccountId) return false
+        return !c.category || c.category === selectedSlot.clipType || c.category === 'uncategorized' || c.category === ''
+      })
+    : clips.filter(c => !currentAccountId || c.accountId === currentAccountId)
 
   return (
     <div style={{
@@ -337,7 +377,7 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
               {spanningTexts.length > 0 && (
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ fontSize: 11, color: '#888', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>
-                    Persistent text (spans multiple clips)
+                    Persistent text track (spans multiple clips)
                   </div>
                   {spanningTexts.map((st, i) => {
                     const fromSlot = slots[st.fromSlot]
@@ -347,7 +387,7 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
                     return (
                       <div key={i} style={{ background: '#1e2a1e', border: '1px solid #2a4a2a', borderRadius: 8, padding: 12, marginBottom: 8 }}>
                         <div style={{ fontSize: 11, color: '#52c07a', marginBottom: 6 }}>
-                          slots {st.fromSlot + 1}–{st.toSlot + 1} &nbsp;·&nbsp; {startLabel} → {endLabel}
+                          slots {st.fromSlot + 1}–{st.toSlot + 1} &nbsp;·&nbsp; {startLabel} → {endLabel} &nbsp;·&nbsp; separate layer
                         </div>
                         <textarea
                           value={st.textOverride ?? st.text}
@@ -401,14 +441,15 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
                       {filteredClips.slice(0, 30).map(clip => {
                         const selected = selectedSlot.assignedClipId === clip.id
                         const catColor = clipTypeColor[clip.category] ?? '#666'
+                        const score = keywordScore(selectedSlot, clip)
                         return (
                           <div
                             key={clip.id}
                             onClick={() => updateSlot(selectedSlotIdx, { assignedClipId: clip.id })}
                             style={{
-                              border: `2px solid ${selected ? '#2a6ee0' : '#333'}`,
+                              border: `2px solid ${selected ? '#2a6ee0' : score > 0 ? '#4a6a2a' : '#333'}`,
                               borderRadius: 6, padding: '5px 9px', cursor: 'pointer',
-                              background: selected ? '#1e2d4a' : '#1a1a1a',
+                              background: selected ? '#1e2d4a' : score > 0 ? '#1e2a12' : '#1a1a1a',
                             }}
                           >
                             <div style={{ fontSize: 12, color: selected ? '#fff' : '#ccc', fontWeight: selected ? 600 : 400 }}>
@@ -418,6 +459,9 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
                               <div style={{ fontSize: 10, color: catColor, textTransform: 'uppercase', marginTop: 2 }}>
                                 {clip.category}
                               </div>
+                            )}
+                            {score > 0 && !selected && (
+                              <div style={{ fontSize: 9, color: '#8fc04a', marginTop: 1 }}>★ match</div>
                             )}
                           </div>
                         )
