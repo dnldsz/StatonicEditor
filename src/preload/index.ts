@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld('api', {
   updateAccount: (accountId: string, updates: any) => ipcRenderer.invoke('update-account', accountId, updates),
   setCurrentAccount: (accountId: string | null) => ipcRenderer.invoke('set-current-account', accountId),
   // Reference video: extract frames, then Claude Code (MCP) does the analysis
+  getVideoFrame: (videoPath: string, timeSec: number) => ipcRenderer.invoke('get-video-frame', videoPath, timeSec),
   extractReferenceFrames: (videoPath: string) => ipcRenderer.invoke('extract-reference-frames', videoPath),
   downloadReferenceVideo: (url: string) => ipcRenderer.invoke('download-reference-video', url),
   onReferenceResultReady: (cb: (result: any) => void) => {

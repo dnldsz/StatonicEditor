@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, Menu } from 'electron'
 import { join, extname, basename } from 'path'
-import { readFileSync, writeFileSync, watch, readdirSync, existsSync, mkdirSync, copyFileSync, rmSync, statSync } from 'fs'
+import { readFileSync, writeFileSync, watch, readdirSync, existsSync, mkdirSync, copyFileSync, rmSync, statSync, unlinkSync } from 'fs'
 import type { FSWatcher } from 'fs'
 import { spawn, spawnSync } from 'child_process'
 import { tmpdir } from 'os'
@@ -1435,6 +1435,18 @@ ipcMain.handle('download-reference-video', async (_event, url: string): Promise<
   await ytDlpWithBin.execPromise([url, '-o', outPath, '--merge-output-format', 'mp4', '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'])
   if (!existsSync(outPath)) throw new Error('Download failed — file not found after yt-dlp')
   return { path: outPath }
+})
+
+// ── Single frame extraction for clip trim preview ────────────────────────────
+ipcMain.handle('get-video-frame', async (_event, videoPath: string, timeSec: number): Promise<string> => {
+  const tmp = join(tmpdir(), `frame_${Date.now()}.jpg`)
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn('ffmpeg', ['-y', '-ss', String(timeSec), '-i', videoPath, '-frames:v', '1', '-q:v', '3', tmp])
+    proc.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}`))))
+  })
+  const data = readFileSync(tmp)
+  try { unlinkSync(tmp) } catch { /* ignore */ }
+  return 'data:image/jpeg;base64,' + data.toString('base64')
 })
 
 // ── Reference video: extract frames for Claude Code analysis ─────────────────

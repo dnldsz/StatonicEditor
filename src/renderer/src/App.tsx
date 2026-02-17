@@ -8,6 +8,7 @@ import ClipLibrary from './components/ClipLibrary'
 import { AudioLibrary } from './components/AudioLibrary'
 import { ProjectPicker } from './components/ProjectPicker'
 import { ReferenceVideoModal } from './components/ReferenceVideoModal'
+import { ClipTrimModal } from './components/ClipTrimModal'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -1065,6 +1066,7 @@ export default function App(): JSX.Element {
   const [showClipLibrary, setShowClipLibrary] = useState(true)
   const [showProjectPicker, setShowProjectPicker] = useState(false)
   const [showReferenceModal, setShowReferenceModal] = useState(false)
+  const [trimSegment, setTrimSegment] = useState<import('./types').VideoSegment | null>(null)
 
   const handleSelectClip = useCallback(async (clip: LibraryClip) => {
     // Preview clip in canvas or add to timeline
@@ -1328,6 +1330,7 @@ export default function App(): JSX.Element {
           onMoveSegmentToNewTrack={handleMoveSegmentToNewTrack}
           onMoveSegmentBetweenTracks={handleMoveSegmentBetweenTracks}
           onPackBaseTrack={handlePackBaseTrack}
+          onTrimSegment={(seg) => setTrimSegment(seg)}
         />
       </div>
 
@@ -1337,6 +1340,18 @@ export default function App(): JSX.Element {
           accountId={currentAccountId}
           onSelect={handleSelectProject}
           onClose={() => setShowProjectPicker(false)}
+        />
+      )}
+
+      {/* Clip Trim Modal */}
+      {trimSegment && (
+        <ClipTrimModal
+          segment={trimSegment}
+          onClose={() => setTrimSegment(null)}
+          onApply={(patch) => {
+            dispatch({ type: 'UPDATE_SEGMENT', id: trimSegment.id, patch })
+            setTrimSegment(null)
+          }}
         />
       )}
 
