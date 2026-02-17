@@ -22,8 +22,8 @@ function uid(): string {
 }
 
 export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.Element {
-  const [step, setStep] = useState<'pick' | 'analyze' | 'edit'>('pick')
-  const [analyzing, setAnalyzing] = useState(false)
+  const [step, setStep] = useState<'pick' | 'extracting' | 'waiting' | 'edit'>('pick')
+  const [sceneCount, setSceneCount] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [slots, setSlots] = useState<ReferenceSlot[]>([])
   const [selectedSlotIdx, setSelectedSlotIdx] = useState(0)
@@ -34,23 +34,32 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
     window.api.getClipLibrary().then(setClips).catch(() => {})
   }, [])
 
+  // Listen for Claude's analysis result arriving via the file watcher
+  useEffect(() => {
+    const unsub = window.api.onReferenceResultReady((result: { slots: ReferenceSlot[] }) => {
+      if (result?.slots?.length) {
+        setSlots(result.slots.map(s => ({ ...s, textOverride: s.detectedText })))
+        setStep('edit')
+      }
+    })
+    return unsub
+  }, [])
+
   async function handlePickVideo(): Promise<void> {
     const result = await window.api.openVideo()
     if (!result) return
     const videoPath = (result as any).path
     if (!videoPath) return
-    setAnalyzing(true)
-    setStep('analyze')
+
     setError(null)
+    setStep('extracting')
     try {
-      const detected: ReferenceSlot[] = await (window.api as any).analyzeReferenceVideo(videoPath)
-      setSlots(detected.map(s => ({ ...s, textOverride: s.detectedText })))
-      setStep('edit')
+      const { sceneCount: n } = await window.api.extractReferenceFrames(videoPath)
+      setSceneCount(n)
+      setStep('waiting')
     } catch (err: any) {
       setError(err?.message ?? String(err))
       setStep('pick')
-    } finally {
-      setAnalyzing(false)
     }
   }
 
@@ -59,12 +68,8 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
   }
 
   function handleCreateProject(): void {
-    const videoTrack: Track = {
-      id: uid(), type: 'video', label: 'VIDEO', segments: [],
-    }
-    const textTrack: Track = {
-      id: uid(), type: 'text', label: 'TEXT', segments: [],
-    }
+    const videoTrack: Track = { id: uid(), type: 'video', label: 'VIDEO', segments: [] }
+    const textTrack: Track = { id: uid(), type: 'text', label: 'TEXT', segments: [] }
 
     for (const slot of slots) {
       const startUs = Math.round(slot.startSec * 1e6)
@@ -142,11 +147,12 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
         </div>
 
         <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
+
           {/* Step: pick */}
           {step === 'pick' && (
             <div style={{ textAlign: 'center', padding: '40px 0' }}>
               <p style={{ color: '#888', marginBottom: 24 }}>
-                Select a reference video to detect its structure and recreate it with your own footage.
+                Select a reference video to extract its scene structure, then have Claude Code analyze it.
               </p>
               {error && <p style={{ color: '#e05252', marginBottom: 16, fontSize: 13 }}>{error}</p>}
               <button
@@ -161,16 +167,49 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
             </div>
           )}
 
-          {/* Step: analyzing */}
-          {step === 'analyze' && (
+          {/* Step: extracting frames */}
+          {step === 'extracting' && (
             <div style={{ textAlign: 'center', padding: '60px 0', color: '#888' }}>
-              <div style={{ marginBottom: 16, fontSize: 24 }}>🔍</div>
-              <p>Detecting scenes and analyzing with Claude vision...</p>
-              {analyzing && <p style={{ fontSize: 12, marginTop: 8 }}>This may take 15–30 seconds</p>}
+              <div style={{ marginBottom: 16, fontSize: 24 }}>🎬</div>
+              <p>Detecting scenes and extracting keyframes...</p>
             </div>
           )}
 
-          {/* Step: edit */}
+          {/* Step: waiting for Claude Code */}
+          {step === 'waiting' && (
+            <div style={{ padding: '32px 0' }}>
+              <div style={{ textAlign: 'center', marginBottom: 28 }}>
+                <div style={{ fontSize: 28, marginBottom: 12 }}>✅</div>
+                <p style={{ color: '#ccc', fontSize: 15, marginBottom: 4 }}>
+                  {sceneCount} scene{sceneCount !== 1 ? 's' : ''} extracted
+                </p>
+                <p style={{ color: '#666', fontSize: 13 }}>Waiting for Claude Code to analyze the frames...</p>
+              </div>
+
+              <div style={{
+                background: '#222', border: '1px solid #333', borderRadius: 8,
+                padding: '16px 20px',
+              }}>
+                <p style={{ color: '#aaa', fontSize: 13, marginBottom: 12, fontWeight: 600 }}>
+                  In Claude Code, say:
+                </p>
+                <div style={{
+                  background: '#111', borderRadius: 6, padding: '10px 14px',
+                  fontFamily: 'monospace', fontSize: 13, color: '#7ec8e3',
+                  userSelect: 'all',
+                }}>
+                  analyze the reference video frames and write the result
+                </div>
+                <p style={{ color: '#555', fontSize: 12, marginTop: 12 }}>
+                  Claude will call <code style={{ color: '#888' }}>get_reference_frames</code> to view the scenes,
+                  then <code style={{ color: '#888' }}>write_reference_result</code> to send the analysis here.
+                  The modal will update automatically.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Step: edit slots */}
           {step === 'edit' && slots.length > 0 && (
             <>
               {/* Slot strip */}
@@ -227,10 +266,7 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
                   <div>
                     <label style={{ display: 'block', fontSize: 11, color: '#888', marginBottom: 6 }}>
                       ASSIGN CLIP
-                      <span style={{
-                        marginLeft: 8, color: clipTypeColor[selectedSlot.clipType] ?? '#888',
-                        textTransform: 'uppercase',
-                      }}>
+                      <span style={{ marginLeft: 8, color: clipTypeColor[selectedSlot.clipType] ?? '#888', textTransform: 'uppercase' }}>
                         (suggested: {selectedSlot.clipType})
                       </span>
                     </label>
@@ -258,7 +294,7 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
               )}
 
               {/* Project name */}
-              <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 4 }}>
                 <label style={{ display: 'block', fontSize: 11, color: '#888', marginBottom: 4 }}>PROJECT NAME</label>
                 <input
                   value={projectName}

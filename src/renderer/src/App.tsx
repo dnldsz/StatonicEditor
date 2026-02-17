@@ -457,7 +457,8 @@ declare global {
       getAudioLibrary: () => Promise<LibraryAudio[]>
       updateAudioMetadata: (audioId: string, updates: Partial<LibraryAudio>) => Promise<{ ok?: boolean; audio?: LibraryAudio; error?: string }>
       deleteAudioFromLibrary: (audioId: string) => Promise<{ ok?: boolean; error?: string }>
-      analyzeReferenceVideo: (videoPath: string) => Promise<Array<{ startSec: number; durationSec: number; thumbnailPath: string; detectedText: string; clipType: 'hook' | 'gizmo' | 'showcase'; description: string }>>
+      extractReferenceFrames: (videoPath: string) => Promise<{ ok: boolean; sceneCount: number }>
+      onReferenceResultReady: (cb: (result: any) => void) => () => void
     }
   }
 }
