@@ -270,24 +270,34 @@ export function ReferenceVideoModal({ onClose, onCreateProject }: Props): JSX.El
                         (suggested: {selectedSlot.clipType})
                       </span>
                     </label>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, maxHeight: 160, overflow: 'auto' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, maxHeight: 200, overflow: 'auto' }}>
                       {filteredClips.length === 0 && (
                         <span style={{ fontSize: 12, color: '#555' }}>No clips in library matching this type</span>
                       )}
-                      {filteredClips.slice(0, 20).map(clip => (
-                        <div
-                          key={clip.id}
-                          onClick={() => updateSlot(selectedSlotIdx, { assignedClipId: clip.id })}
-                          style={{
-                            border: `2px solid ${selectedSlot.assignedClipId === clip.id ? '#2a6ee0' : '#333'}`,
-                            borderRadius: 6, padding: '4px 8px', cursor: 'pointer',
-                            background: selectedSlot.assignedClipId === clip.id ? '#1e2d4a' : '#1a1a1a',
-                            fontSize: 11, color: '#ccc',
-                          }}
-                        >
-                          {clip.name || clip.id.slice(0, 8)}
-                        </div>
-                      ))}
+                      {filteredClips.slice(0, 30).map(clip => {
+                        const selected = selectedSlot.assignedClipId === clip.id
+                        const catColor = clipTypeColor[clip.category] ?? '#666'
+                        return (
+                          <div
+                            key={clip.id}
+                            onClick={() => updateSlot(selectedSlotIdx, { assignedClipId: clip.id })}
+                            style={{
+                              border: `2px solid ${selected ? '#2a6ee0' : '#333'}`,
+                              borderRadius: 6, padding: '5px 9px', cursor: 'pointer',
+                              background: selected ? '#1e2d4a' : '#1a1a1a',
+                            }}
+                          >
+                            <div style={{ fontSize: 12, color: selected ? '#fff' : '#ccc', fontWeight: selected ? 600 : 400 }}>
+                              {clip.name || clip.id.slice(0, 8)}
+                            </div>
+                            {clip.category && clip.category !== 'uncategorized' && (
+                              <div style={{ fontSize: 10, color: catColor, textTransform: 'uppercase', marginTop: 2 }}>
+                                {clip.category}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
                     </div>
                   </div>
                 </div>
