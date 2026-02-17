@@ -18,6 +18,7 @@ interface ToolbarProps {
   zoom: number
   onZoomChange: (zoom: number) => void
   onExport: () => void
+  onVariations: () => void
   mode: 'single' | 'batch'
   onExitBatch: () => void
   accounts: Account[]
@@ -34,7 +35,7 @@ export default function Toolbar({
   onAddVideo, onAddText,
   canUndo, canRedo, onUndo, onRedo,
   zoom, onZoomChange,
-  onExport,
+  onExport, onVariations,
   mode, onExitBatch,
   accounts, currentAccountId, onSelectAccount,
   lastSavedTime
@@ -66,6 +67,7 @@ export default function Toolbar({
             <button className="btn" onClick={onOpen} title="Open project">Open</button>
             <button className="btn" onClick={onOpenFolder} title="Open batch folder">Batch Edit</button>
             <button className="btn" onClick={onSave} title="Save project (⌘S)">Save</button>
+            <button className="btn" onClick={onVariations} title="Create variations of this project">Variations</button>
           </>
         )}
       </div>

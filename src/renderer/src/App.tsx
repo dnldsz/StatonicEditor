@@ -11,6 +11,7 @@ import { ReferenceVideoModal } from './components/ReferenceVideoModal'
 import { ClipTrimModal } from './components/ClipTrimModal'
 import { SegmentContextMenu } from './components/SegmentContextMenu'
 import { ReplaceClipModal } from './components/ReplaceClipModal'
+import { VariationsPanel, VariationEntry } from './components/VariationsPanel'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -1071,11 +1072,47 @@ export default function App(): JSX.Element {
   const [trimSegment, setTrimSegment] = useState<import('./types').VideoSegment | null>(null)
   const [replaceSegment, setReplaceSegment] = useState<import('./types').VideoSegment | null>(null)
   const [segContextMenu, setSegContextMenu] = useState<{ seg: import('./types').VideoSegment; x: number; y: number } | null>(null)
+  const [variationsMode, setVariationsMode] = useState(false)
+  const [variationsFolder, setVariationsFolder] = useState<string | null>(null)
+  const [editingVariation, setEditingVariation] = useState<string | null>(null)
 
   const handleSelectClip = useCallback(async (clip: LibraryClip) => {
     // Preview clip in canvas or add to timeline
     // For now, just log it - we'll implement add to timeline next
     console.log('Selected clip:', clip)
+  }, [])
+
+  // ── variations ───────────────────────────────────────────────────────────────
+
+  const handleEnterVariations = useCallback(async () => {
+    if (!state.currentFilePath) {
+      alert('Save your project first before creating variations.')
+      return
+    }
+    const clips = await window.api.getClipLibrary()
+    const result = await (window.api as any).startVariationsSession({
+      projectPath: state.currentFilePath,
+      project,
+      clips,
+    })
+    if (result?.variationsFolder) {
+      setVariationsFolder(result.variationsFolder)
+      setVariationsMode(true)
+    }
+  }, [state.currentFilePath, project])
+
+  const handleExitVariations = useCallback(() => {
+    setVariationsMode(false)
+    setVariationsFolder(null)
+    setEditingVariation(null);
+    (window.api as any).stopVariationsSession()
+  }, [])
+
+  const handleOpenVariation = useCallback((v: VariationEntry) => {
+    dispatch({ type: 'SET_PROJECT', project: v.project })
+    dispatch({ type: 'SET_FILE_PATH', path: v.path })
+    setEditingVariation(v.name)
+    setVariationsMode(false)
   }, [])
 
   // ── audio library ───────────────────────────────────────────────────────────
@@ -1165,6 +1202,29 @@ export default function App(): JSX.Element {
           Reloaded from file
         </div>
       )}
+      {/* Editing variation banner — sits above toolbar so it's always visible */}
+      {editingVariation && !variationsMode && (
+        <div style={{
+          height: 36, flexShrink: 0,
+          background: '#92400e', borderBottom: '1px solid #b45309',
+          display: 'flex', alignItems: 'center', gap: 14, padding: '0 16px',
+        }}>
+          <button
+            onClick={() => { setVariationsMode(true); setEditingVariation(null) }}
+            style={{
+              background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.15)',
+              color: '#fde68a', borderRadius: 5, padding: '3px 10px',
+              fontSize: 12, cursor: 'pointer',
+            }}
+          >
+            ← Back to Variations
+          </button>
+          <span style={{ fontSize: 12, color: '#fde68a', fontWeight: 600 }}>
+            Editing: {editingVariation}
+          </span>
+        </div>
+      )}
+
       <Toolbar
         onNew={handleNewProject}
         onOpen={handleOpenProject}
@@ -1175,6 +1235,7 @@ export default function App(): JSX.Element {
         zoom={zoom}
         onZoomChange={(z) => dispatch({ type: 'SET_ZOOM', zoom: z })}
         onExport={handleExport}
+        onVariations={handleEnterVariations}
         projectName={project.name}
         onRenameProject={(name) => dispatch({ type: 'SET_PROJECT', project: { ...project, name } })}
         canUndo={past.length > 0}
@@ -1400,6 +1461,16 @@ export default function App(): JSX.Element {
             })
             setReplaceSegment(null)
           }}
+        />
+      )}
+
+      {/* Variations panel */}
+      {variationsMode && (
+        <VariationsPanel
+          project={project}
+          clips={[]}
+          onOpenVariation={handleOpenVariation}
+          onClose={handleExitVariations}
         />
       )}
 

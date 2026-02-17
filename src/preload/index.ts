@@ -60,6 +60,14 @@ contextBridge.exposeInMainWorld('api', {
   getVideoFrame: (videoPath: string, timeSec: number) => ipcRenderer.invoke('get-video-frame', videoPath, timeSec),
   extractReferenceFrames: (videoPath: string) => ipcRenderer.invoke('extract-reference-frames', videoPath),
   downloadReferenceVideo: (url: string) => ipcRenderer.invoke('download-reference-video', url),
+  // Variations
+  startVariationsSession: (data: { projectPath: string; project: any; clips: any[] }) => ipcRenderer.invoke('start-variations-session', data),
+  stopVariationsSession: () => ipcRenderer.invoke('stop-variations-session'),
+  onVariationAdded: (cb: (data: { name: string; path: string; project: any }) => void) => {
+    const handler = (_event: any, data: any) => cb(data)
+    ipcRenderer.on('variation-added', handler)
+    return () => ipcRenderer.removeListener('variation-added', handler)
+  },
   onReferenceResultReady: (cb: (result: any) => void) => {
     const handler = (_event: any, result: any) => cb(result)
     ipcRenderer.on('reference-result-ready', handler)

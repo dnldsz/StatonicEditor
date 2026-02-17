@@ -41,6 +41,8 @@ let filterDebounce: ReturnType<typeof setTimeout> | null = null
 let loadProjectDebounce: ReturnType<typeof setTimeout> | null = null
 let referenceResultWatcher: FSWatcher | null = null
 let referenceResultDebounce: ReturnType<typeof setTimeout> | null = null
+let variationsWatcher: FSWatcher | null = null
+let variationsDebounce: ReturnType<typeof setTimeout> | null = null
 
 function watchProjectFile(filePath: string): void {
   if (fileWatcher) { fileWatcher.close(); fileWatcher = null }
@@ -230,6 +232,27 @@ function startReferenceResultWatcher(): void {
     })
   } catch (err) {
     console.error('Failed to watch reference-result file:', err)
+  }
+}
+
+function startVariationsFolderWatcher(folderPath: string): void {
+  if (variationsWatcher) { variationsWatcher.close(); variationsWatcher = null }
+  try {
+    variationsWatcher = watch(folderPath, (_, filename) => {
+      if (!filename?.endsWith('.json')) return
+      if (variationsDebounce) clearTimeout(variationsDebounce)
+      variationsDebounce = setTimeout(() => {
+        try {
+          const fullPath = join(folderPath, filename)
+          if (!existsSync(fullPath)) return
+          const project = JSON.parse(readFileSync(fullPath, 'utf-8'))
+          const name = filename.replace(/\.json$/, '')
+          mainWin?.webContents.send('variation-added', { name, path: fullPath, project })
+        } catch { /* ignore mid-write */ }
+      }, 200)
+    })
+  } catch (err) {
+    console.error('Failed to watch variations folder:', err)
   }
 }
 
@@ -964,6 +987,35 @@ ipcMain.handle('open-folder', async () => {
   }
 
   return { folderPath, projects }
+})
+
+// ── Variations session ────────────────────────────────────────────────────────
+ipcMain.handle('start-variations-session', async (_event, data: {
+  projectPath: string
+  project: any
+  clips: any[]
+}) => {
+  const projectName = (data.project?.name ?? 'Project').replace(/[/\\?%*:|"<>]/g, '-')
+  const projectDir = data.projectPath ? join(data.projectPath, '..') : join(app.getPath('appData'), 'Statonic', 'projects')
+  const variationsFolder = join(projectDir, `${projectName} variations`)
+  mkdirSync(variationsFolder, { recursive: true })
+
+  const stateDir = join(app.getPath('appData'), 'Statonic')
+  mkdirSync(stateDir, { recursive: true })
+  writeFileSync(join(stateDir, 'variation-context.json'), JSON.stringify({
+    projectPath: data.projectPath,
+    variationsFolder,
+    project: data.project,
+    clips: data.clips,
+  }, null, 2))
+
+  startVariationsFolderWatcher(variationsFolder)
+  return { variationsFolder }
+})
+
+ipcMain.handle('stop-variations-session', () => {
+  if (variationsWatcher) { variationsWatcher.close(); variationsWatcher = null }
+  return { ok: true }
 })
 
 ipcMain.handle('render-thumbnail', async (_event, projectPath: string, timeSec = 0.5) => {
