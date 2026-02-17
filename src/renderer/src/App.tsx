@@ -9,6 +9,8 @@ import { AudioLibrary } from './components/AudioLibrary'
 import { ProjectPicker } from './components/ProjectPicker'
 import { ReferenceVideoModal } from './components/ReferenceVideoModal'
 import { ClipTrimModal } from './components/ClipTrimModal'
+import { SegmentContextMenu } from './components/SegmentContextMenu'
+import { ReplaceClipModal } from './components/ReplaceClipModal'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -1067,6 +1069,8 @@ export default function App(): JSX.Element {
   const [showProjectPicker, setShowProjectPicker] = useState(false)
   const [showReferenceModal, setShowReferenceModal] = useState(false)
   const [trimSegment, setTrimSegment] = useState<import('./types').VideoSegment | null>(null)
+  const [replaceSegment, setReplaceSegment] = useState<import('./types').VideoSegment | null>(null)
+  const [segContextMenu, setSegContextMenu] = useState<{ seg: import('./types').VideoSegment; x: number; y: number } | null>(null)
 
   const handleSelectClip = useCallback(async (clip: LibraryClip) => {
     // Preview clip in canvas or add to timeline
@@ -1330,7 +1334,7 @@ export default function App(): JSX.Element {
           onMoveSegmentToNewTrack={handleMoveSegmentToNewTrack}
           onMoveSegmentBetweenTracks={handleMoveSegmentBetweenTracks}
           onPackBaseTrack={handlePackBaseTrack}
-          onTrimSegment={(seg) => setTrimSegment(seg)}
+          onVideoSegmentContextMenu={(seg, x, y) => setSegContextMenu({ seg, x, y })}
         />
       </div>
 
@@ -1343,6 +1347,27 @@ export default function App(): JSX.Element {
         />
       )}
 
+      {/* Segment context menu */}
+      {segContextMenu && (
+        <SegmentContextMenu
+          x={segContextMenu.x}
+          y={segContextMenu.y}
+          onClose={() => setSegContextMenu(null)}
+          items={[
+            {
+              label: 'Adjust Clip',
+              icon: '✂️',
+              onClick: () => { setTrimSegment(segContextMenu.seg); setSegContextMenu(null) },
+            },
+            {
+              label: 'Replace Clip',
+              icon: '🔄',
+              onClick: () => { setReplaceSegment(segContextMenu.seg); setSegContextMenu(null) },
+            },
+          ]}
+        />
+      )}
+
       {/* Clip Trim Modal */}
       {trimSegment && (
         <ClipTrimModal
@@ -1351,6 +1376,31 @@ export default function App(): JSX.Element {
           onApply={(patch) => {
             dispatch({ type: 'UPDATE_SEGMENT', id: trimSegment.id, patch })
             setTrimSegment(null)
+          }}
+        />
+      )}
+
+      {/* Replace Clip Modal */}
+      {replaceSegment && (
+        <ReplaceClipModal
+          segment={replaceSegment}
+          currentAccountId={currentAccountId}
+          onClose={() => setReplaceSegment(null)}
+          onReplace={(clip) => {
+            dispatch({
+              type: 'UPDATE_SEGMENT',
+              id: replaceSegment.id,
+              patch: {
+                src: clip.path,
+                name: clip.name,
+                sourceWidth: clip.width,
+                sourceHeight: clip.height,
+                fileDurationUs: Math.round(clip.duration * 1e6),
+                sourceStartUs: 0,
+                sourceDurationUs: replaceSegment.durationUs,
+              },
+            })
+            setReplaceSegment(null)
           }}
         />
       )}

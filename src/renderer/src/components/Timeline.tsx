@@ -94,7 +94,7 @@ interface TimelineProps {
   onMoveSegmentToNewTrack: (fromTrackId: string, segId: string) => void
   onMoveSegmentBetweenTracks: (fromTrackId: string, segId: string, toTrackId: string) => void
   onPackBaseTrack: () => void
-  onTrimSegment?: (seg: VideoSegment) => void
+  onVideoSegmentContextMenu?: (seg: VideoSegment, x: number, y: number) => void
 }
 
 function formatTime(sec: number): string {
@@ -114,7 +114,7 @@ function getRulerInterval(zoom: number): { major: number; minor: number } {
 export default function Timeline({
   project, currentTimeSec, selectedId, zoom,
   onSeek, onSelectSegment, onUpdateSegment, onUpdateTrack, onDuplicateSegment, onDropVideo, onDropLibraryClip, onDropLibraryAudio,
-  onZoomChange, onMoveSegmentToNewTrack, onMoveSegmentBetweenTracks, onPackBaseTrack, onTrimSegment
+  onZoomChange, onMoveSegmentToNewTrack, onMoveSegmentBetweenTracks, onPackBaseTrack, onVideoSegmentContextMenu
 }: TimelineProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState | null>(null)
@@ -543,7 +543,9 @@ export default function Timeline({
                       onContextMenu={(e) => {
                         e.preventDefault()
                         e.stopPropagation()
-                        if (seg.type === 'video' && onTrimSegment) onTrimSegment(seg as VideoSegment)
+                        if (seg.type === 'video' && onVideoSegmentContextMenu) {
+                          onVideoSegmentContextMenu(seg as VideoSegment, e.clientX, e.clientY)
+                        }
                       }}
                     >
                       <div
