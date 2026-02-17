@@ -84,7 +84,7 @@ export function VariationsPanel({ project, clips: _clips, onOpenVariation, onClo
         padding: '0 20px 0 160px', gap: 16,
       }}>
         <span style={{ fontSize: 15, fontWeight: 600, color: '#ddd', flex: 1, textAlign: 'center' }}>
-          {projectName} <span style={{ color: '#555', fontWeight: 400, marginLeft: 6 }}>variations</span>
+          {projectName} <span style={{ color: '#555', fontWeight: 600, marginLeft: 6 }}>Variations</span>
         </span>
         <button
           onClick={onClose}
