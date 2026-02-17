@@ -1089,7 +1089,8 @@ export default function App(): JSX.Element {
       alert('Save your project first before creating variations.')
       return
     }
-    const clips = await window.api.getClipLibrary()
+    const allClips = await window.api.getClipLibrary()
+    const clips = currentAccountId ? allClips.filter((c) => c.accountId === currentAccountId) : allClips
     const result = await (window.api as any).startVariationsSession({
       projectPath: state.currentFilePath,
       project,

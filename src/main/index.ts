@@ -237,11 +237,14 @@ function startReferenceResultWatcher(): void {
 
 function startVariationsFolderWatcher(folderPath: string): void {
   if (variationsWatcher) { variationsWatcher.close(); variationsWatcher = null }
+  const perFileTimers = new Map<string, ReturnType<typeof setTimeout>>()
   try {
     variationsWatcher = watch(folderPath, (_, filename) => {
       if (!filename?.endsWith('.json')) return
-      if (variationsDebounce) clearTimeout(variationsDebounce)
-      variationsDebounce = setTimeout(() => {
+      const existing = perFileTimers.get(filename)
+      if (existing) clearTimeout(existing)
+      perFileTimers.set(filename, setTimeout(() => {
+        perFileTimers.delete(filename)
         try {
           const fullPath = join(folderPath, filename)
           if (!existsSync(fullPath)) return
@@ -249,7 +252,7 @@ function startVariationsFolderWatcher(folderPath: string): void {
           const name = filename.replace(/\.json$/, '')
           mainWin?.webContents.send('variation-added', { name, path: fullPath, project })
         } catch { /* ignore mid-write */ }
-      }, 200)
+      }, 200))
     })
   } catch (err) {
     console.error('Failed to watch variations folder:', err)
