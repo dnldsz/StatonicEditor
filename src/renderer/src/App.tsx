@@ -1074,6 +1074,7 @@ export default function App(): JSX.Element {
   const [segContextMenu, setSegContextMenu] = useState<{ seg: import('./types').VideoSegment; x: number; y: number } | null>(null)
   const [variationsMode, setVariationsMode] = useState(false)
   const [variationsFolder, setVariationsFolder] = useState<string | null>(null)
+  const [initialVariations, setInitialVariations] = useState<Array<{ name: string; path: string; project: any }>>([])
   const [editingVariation, setEditingVariation] = useState<string | null>(null)
   const savedAccountRef = useRef<string | null>(null)
 
@@ -1100,6 +1101,7 @@ export default function App(): JSX.Element {
     })
     if (result?.variationsFolder) {
       setVariationsFolder(result.variationsFolder)
+      setInitialVariations(result.existing ?? [])
       setVariationsMode(true)
     }
   }, [state.currentFilePath, project, currentAccountId])
@@ -1107,6 +1109,7 @@ export default function App(): JSX.Element {
   const handleExitVariations = useCallback(() => {
     setVariationsMode(false)
     setVariationsFolder(null)
+    setInitialVariations([])
     setEditingVariation(null)
     // Restore account in case Claude switched it via write_statonic_project
     if (savedAccountRef.current !== null) {
@@ -1482,6 +1485,7 @@ export default function App(): JSX.Element {
           project={project}
           clips={[]}
           projectName={project.name}
+          initialVariations={initialVariations}
           onOpenVariation={handleOpenVariation}
           onClose={handleExitVariations}
         />

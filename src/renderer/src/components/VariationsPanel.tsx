@@ -14,6 +14,7 @@ interface Props {
   onOpenVariation: (v: VariationEntry) => void
   onClose: () => void
   projectName: string
+  initialVariations?: Array<{ name: string; path: string; project: Project }>
 }
 
 function buildAnatomy(p: Project): Array<{ slotLabel: string; clipName: string; text: string }> {
@@ -45,10 +46,26 @@ function buildAnatomy(p: Project): Array<{ slotLabel: string; clipName: string; 
   })
 }
 
-export function VariationsPanel({ project, clips: _clips, onOpenVariation, onClose, projectName }: Props): JSX.Element {
-  const [variations, setVariations] = useState<VariationEntry[]>([])
+export function VariationsPanel({ project, clips: _clips, onOpenVariation, onClose, projectName, initialVariations }: Props): JSX.Element {
+  const [variations, setVariations] = useState<VariationEntry[]>(() =>
+    (initialVariations ?? []).map(v => ({ ...v, thumbnail: null }))
+  )
   const [rendering, setRendering] = useState<Set<string>>(new Set())
   const anatomy = buildAnatomy(project)
+
+  // Render thumbnails for initial (pre-existing) variations
+  useEffect(() => {
+    if (!initialVariations?.length) return
+    for (const v of initialVariations) {
+      setRendering(s => new Set(s).add(v.path))
+      window.api.renderThumbnail(v.path, 0.5).then((thumb: string | null) => {
+        setVariations(prev => prev.map(e => e.path === v.path ? { ...e, thumbnail: thumb } : e))
+        setRendering(s => { const n = new Set(s); n.delete(v.path); return n })
+      }).catch(() => {
+        setRendering(s => { const n = new Set(s); n.delete(v.path); return n })
+      })
+    }
+  }, [])
 
   useEffect(() => {
     const unsub = (window.api as any).onVariationAdded((data: { name: string; path: string; project: Project }) => {

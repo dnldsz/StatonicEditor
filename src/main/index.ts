@@ -1022,8 +1022,21 @@ ipcMain.handle('start-variations-session', async (_event, data: {
     clips: data.clips,
   }, null, 2))
 
+  // Scan existing variation files to return as initial state
+  const existing: Array<{ name: string; path: string; project: any }> = []
+  try {
+    const files = readdirSync(variationsFolder).filter(f => f.endsWith('.json'))
+    for (const file of files) {
+      try {
+        const fullPath = join(variationsFolder, file)
+        const project = JSON.parse(readFileSync(fullPath, 'utf-8'))
+        existing.push({ name: file.replace(/\.json$/, ''), path: fullPath, project })
+      } catch { /* skip unreadable files */ }
+    }
+  } catch { /* folder may be empty or newly created */ }
+
   startVariationsFolderWatcher(variationsFolder)
-  return { variationsFolder }
+  return { variationsFolder, existing }
 })
 
 ipcMain.handle('stop-variations-session', () => {
