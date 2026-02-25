@@ -696,11 +696,33 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
 
   if (allVideoSegs.length === 0) return { error: 'No video segments to export' }
 
-  const totalDuration = Math.max(...allVideoSegs.map(({ seg }) => (seg.startUs + seg.durationUs) / 1e6))
+  const FPS = 30
+  const rawDuration = Math.max(...allVideoSegs.map(({ seg }) => (seg.startUs + seg.durationUs) / 1e6))
+  const totalFrames = Math.round(rawDuration * FPS)
+  const totalDuration = rawDuration
+
+  // Match each text overlay to the video segment it sits on top of (by time overlap).
+  // Matched pairs are composited together so the text inherits the video's exact frame
+  // lifetime — no independent frame count calculation, no floating-point timing issues.
+  const textMatchedToVideo: Map<number, number> = new Map() // videoIdx → textIdx
+  const unmatchedTextIdxs: number[] = []
+  for (let ti = 0; ti < textOverlays.length; ti++) {
+    const t = textOverlays[ti]
+    const matchIdx = allVideoSegs.findIndex(({ seg }) => {
+      const vStart = seg.startUs / 1e6
+      const vEnd = (seg.startUs + seg.durationUs) / 1e6
+      return Math.abs(vStart - t.startSec) < 0.01 && Math.abs(vEnd - t.endSec) < 0.01
+    })
+    if (matchIdx >= 0 && !textMatchedToVideo.has(matchIdx)) {
+      textMatchedToVideo.set(matchIdx, ti)
+    } else {
+      unmatchedTextIdxs.push(ti)
+    }
+  }
 
   // Input 0: black canvas for the full output duration. Inputs 1..N: video segments.
   const inputs: string[] = [
-    '-f', 'lavfi', '-i', `color=c=black:s=${canvas.width}x${canvas.height}:r=30:d=${totalDuration}`
+    '-f', 'lavfi', '-i', `color=c=black:s=${canvas.width}x${canvas.height}:r=${FPS}:d=${totalDuration}`
   ]
   for (const { seg } of allVideoSegs) {
     inputs.push(
@@ -708,6 +730,22 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
       '-t', String(seg.sourceDurationUs / 1_000_000),
       '-i', seg.src
     )
+  }
+
+  // Text PNG inputs (only for unmatched text; matched text is added after video inputs)
+  const pngInputArgs: string[] = []
+  // Matched text PNG inputs come first (in video segment order), then unmatched
+  const matchedTextOrder: number[] = [] // textIdx in order of appearance as inputs
+  for (let vi = 0; vi < allVideoSegs.length; vi++) {
+    if (textMatchedToVideo.has(vi)) {
+      matchedTextOrder.push(textMatchedToVideo.get(vi)!)
+    }
+  }
+  for (const ti of matchedTextOrder) {
+    pngInputArgs.push('-loop', '1', '-i', textOverlays[ti].path)
+  }
+  for (const ti of unmatchedTextIdxs) {
+    pngInputArgs.push('-loop', '1', '-i', textOverlays[ti].path)
   }
 
   const filterParts: string[] = []
@@ -775,7 +813,28 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
     }
   }
 
-  // Step 1: crop each segment, scale to display size, and shift PTS to output timeline position
+  // Track which text PNG input index corresponds to each matched/unmatched text
+  const pngInputBaseIdx = 1 + allVideoSegs.length
+  let pngInputCounter = 0
+  const matchedTextInputIdx: Map<number, number> = new Map() // videoIdx → ffmpeg input index
+  for (let vi = 0; vi < allVideoSegs.length; vi++) {
+    if (textMatchedToVideo.has(vi)) {
+      matchedTextInputIdx.set(vi, pngInputBaseIdx + pngInputCounter)
+      pngInputCounter++
+    }
+  }
+  const unmatchedTextInputIdx: Map<number, number> = new Map() // textIdx → ffmpeg input index
+  for (const ti of unmatchedTextIdxs) {
+    unmatchedTextInputIdx.set(ti, pngInputBaseIdx + pngInputCounter)
+    pngInputCounter++
+  }
+
+  // Step 1: For each video segment — crop, scale, normalize to FPS.
+  // If the segment has a matched text overlay, composite the text onto the video
+  // by placing the video on a canvas-sized background (eof_action=endall makes it
+  // finite — matching the video's actual decoded frame count), then overlaying the
+  // text PNG. The text inherits the video's lifetime automatically.
+  // Finally, setpts positions the result on the output timeline.
   for (let i = 0; i < allVideoSegs.length; i++) {
     const { seg } = allVideoSegs[i]
     const srcW = seg.sourceWidth ?? canvas.width
@@ -790,78 +849,113 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
       ? `crop=iw*${cW}:ih*${cH}:iw*${cropL}:ih*${cropT},`
       : ''
 
-    // Shift PTS so this segment appears at its correct timeline position
     const outStart = seg.startUs / 1e6
-    const ptsShift = `setpts=PTS-STARTPTS+${outStart}/TB`
-
     const { filter: scaleFilter, needsCentering } = getScaleFilter(seg, outStart, canvas)
+    const hasMatchedText = textMatchedToVideo.has(i)
 
-    filterParts.push(
-      `[${i + 1}:v]${cropFilter}${scaleFilter},fps=30,${ptsShift}[sv${i}]`
-    )
+    if (hasMatchedText) {
+      const textInputIdx = matchedTextInputIdx.get(i)!
+      const clipScale = seg.clipScale ?? 1
+      const clipX = seg.clipX ?? 0
+      const clipY = seg.clipY ?? 0
+
+      // Prepare the video stream (crop, scale, fps — no setpts yet)
+      filterParts.push(
+        `[${i + 1}:v]${cropFilter}${scaleFilter},fps=${FPS}[vprep${i}]`
+      )
+
+      // Compute overlay position for placing video on canvas-sized background
+      let overlayExpr: string
+      if (needsCentering) {
+        const userOffsetX = Math.round((clipX + 1) / 2 * canvas.width - canvas.width / 2)
+        const userOffsetY = Math.round((1 - clipY) / 2 * canvas.height - canvas.height / 2)
+        overlayExpr = `overlay=x='(W-w)/2+${userOffsetX}':y='(H-h)/2+${userOffsetY}':eval=frame:eof_action=endall`
+      } else {
+        const fullH = Math.round(clipScale * canvas.height / 2) * 2
+        const fullW = Math.round((srcW / srcH) * fullH / 2) * 2
+        const frameCX = (clipX + 1) / 2 * canvas.width
+        const frameCY = (1 - clipY) / 2 * canvas.height
+        const x = Math.round(frameCX - fullW / 2 + cropL * fullW)
+        const y = Math.round(frameCY - fullH / 2 + cropT * fullH)
+        overlayExpr = `overlay=${x}:${y}:eof_action=endall`
+      }
+
+      // Per-segment canvas background → overlay video (eof_action=endall makes it finite)
+      // → overlay text PNG → position on timeline
+      filterParts.push(
+        `color=c=black:s=${canvas.width}x${canvas.height}:r=${FPS}[bg${i}]`,
+        `[bg${i}][vprep${i}]${overlayExpr}[vpos${i}]`,
+        `[vpos${i}][${textInputIdx}:v]overlay=0:0[vtxt${i}]`,
+        `[vtxt${i}]setpts=PTS-STARTPTS+${outStart}/TB[sv${i}]`
+      )
+    } else {
+      // No matched text — original pipeline: crop, scale, fps, setpts
+      const ptsShift = `setpts=PTS-STARTPTS+${outStart}/TB`
+      filterParts.push(
+        `[${i + 1}:v]${cropFilter}${scaleFilter},fps=${FPS},${ptsShift}[sv${i}]`
+      )
+    }
   }
 
-  // Step 2: chain overlay filters — each segment placed at the right position
-  // Timing is controlled by PTS shifting in step 1, so we use shortest=1 to handle duration
+  // Step 2: chain overlay filters — place each segment onto the main canvas.
+  // Matched segments are already canvas-sized (overlay at 0:0).
+  // Unmatched segments are at their original size (overlay at computed position).
   let currentIn = '[0:v]'
   for (let i = 0; i < allVideoSegs.length; i++) {
     const { seg } = allVideoSegs[i]
-    const clipScale = seg.clipScale ?? 1
-    const clipX = seg.clipX ?? 0
-    const clipY = seg.clipY ?? 0
-    const srcW = seg.sourceWidth ?? canvas.width
-    const srcH = seg.sourceHeight ?? canvas.height
-    const cropL = seg.cropLeft ?? 0, cropT = seg.cropTop ?? 0
-
     const outLabel = i === allVideoSegs.length - 1 ? '[vcomp]' : `[ov${i}]`
+    const hasMatchedText = textMatchedToVideo.has(i)
 
-    // Animated segments with keyframes need expression-based centering
-    if (seg.scaleKeyframes && seg.scaleKeyframes.length > 0) {
-      // Calculate user's positioning offsets (from clipX, clipY)
-      const userOffsetX = Math.round((clipX + 1) / 2 * canvas.width - canvas.width / 2)
-      const userOffsetY = Math.round((1 - clipY) / 2 * canvas.height - canvas.height / 2)
-
-      // Center the video and add user offsets
-      const xExpr = `(W-w)/2+${userOffsetX}`
-      const yExpr = `(H-h)/2+${userOffsetY}`
-
+    if (hasMatchedText) {
+      // Already canvas-sized with text burned in
       filterParts.push(
-        `${currentIn}[sv${i}]overlay=x='${xExpr}':y='${yExpr}':eval=frame:eof_action=pass${outLabel}`
+        `${currentIn}[sv${i}]overlay=0:0:eof_action=pass${outLabel}`
       )
     } else {
-      // Static positioning for non-animated segments
-      const fullH = Math.round(clipScale * canvas.height / 2) * 2
-      const fullW = Math.round((srcW / srcH) * fullH / 2) * 2
+      const clipScale = seg.clipScale ?? 1
+      const clipX = seg.clipX ?? 0
+      const clipY = seg.clipY ?? 0
+      const srcW = seg.sourceWidth ?? canvas.width
+      const srcH = seg.sourceHeight ?? canvas.height
+      const cropL = seg.cropLeft ?? 0, cropT = seg.cropTop ?? 0
 
-      const frameCX = (clipX + 1) / 2 * canvas.width
-      const frameCY = (1 - clipY) / 2 * canvas.height
-      const x = Math.round(frameCX - fullW / 2 + cropL * fullW)
-      const y = Math.round(frameCY - fullH / 2 + cropT * fullH)
-
-      filterParts.push(
-        `${currentIn}[sv${i}]overlay=${x}:${y}:eof_action=pass${outLabel}`
-      )
+      if (seg.scaleKeyframes && seg.scaleKeyframes.length > 0) {
+        const userOffsetX = Math.round((clipX + 1) / 2 * canvas.width - canvas.width / 2)
+        const userOffsetY = Math.round((1 - clipY) / 2 * canvas.height - canvas.height / 2)
+        const xExpr = `(W-w)/2+${userOffsetX}`
+        const yExpr = `(H-h)/2+${userOffsetY}`
+        filterParts.push(
+          `${currentIn}[sv${i}]overlay=x='${xExpr}':y='${yExpr}':eval=frame:eof_action=pass${outLabel}`
+        )
+      } else {
+        const fullH = Math.round(clipScale * canvas.height / 2) * 2
+        const fullW = Math.round((srcW / srcH) * fullH / 2) * 2
+        const frameCX = (clipX + 1) / 2 * canvas.width
+        const frameCY = (1 - clipY) / 2 * canvas.height
+        const x = Math.round(frameCX - fullW / 2 + cropL * fullW)
+        const y = Math.round(frameCY - fullH / 2 + cropT * fullH)
+        filterParts.push(
+          `${currentIn}[sv${i}]overlay=${x}:${y}:eof_action=pass${outLabel}`
+        )
+      }
     }
     currentIn = outLabel
   }
 
-  // Text overlays: rendered to PNGs by the browser (supports emoji + WYSIWYG)
-  const pngInputArgs: string[] = []
-  for (const overlay of textOverlays) {
-    pngInputArgs.push('-loop', '1', '-i', overlay.path)
-  }
-
-  // Text overlay input indices start after the black canvas + all video segments
-  let vIn = '[vcomp]'
-  if (textOverlays.length === 0) {
+  // Step 3: Unmatched text overlays (text without a corresponding video segment).
+  // These use enable expressions with integer frame numbers as a fallback.
+  if (unmatchedTextIdxs.length === 0) {
     filterParts.push(`[vcomp]null[vout]`)
   } else {
-    textOverlays.forEach((overlay, i) => {
-      const inputIdx = 1 + allVideoSegs.length + i
-      const outLabel = i === textOverlays.length - 1 ? '[vout]' : `[vto${i}]`
-      // Use gte()*lt() instead of between() to make end time exclusive (start <= t < end)
+    let vIn = '[vcomp]'
+    unmatchedTextIdxs.forEach((ti, idx) => {
+      const overlay = textOverlays[ti]
+      const inputIdx = unmatchedTextInputIdx.get(ti)!
+      const startFrame = Math.round(overlay.startSec * FPS)
+      const endFrame = Math.round(overlay.endSec * FPS) - 1
+      const outLabel = idx === unmatchedTextIdxs.length - 1 ? '[vout]' : `[vto${idx}]`
       filterParts.push(
-        `${vIn}[${inputIdx}:v]overlay=0:0:shortest=1:enable='gte(t,${overlay.startSec})*lt(t,${overlay.endSec})'${outLabel}`
+        `${vIn}[${inputIdx}:v]overlay=0:0:enable='between(n\\,${startFrame}\\,${endFrame})'${outLabel}`
       )
       vIn = outLabel
     })
@@ -940,6 +1034,7 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
     '-preset', 'fast',
     '-crf', '23',
     '-pix_fmt', 'yuv420p',
+    '-frames:v', String(totalFrames),
     ...(audioSegs.length > 0 ? ['-c:a', 'aac', '-b:a', '192k'] : []),
     filePath
   ]
