@@ -853,41 +853,46 @@ ipcMain.handle('export-video', async (event, project: any, textOverlays: Array<{
     const { filter: scaleFilter, needsCentering } = getScaleFilter(seg, outStart, canvas)
     const hasMatchedText = textMatchedToVideo.has(i)
 
-    if (hasMatchedText) {
+    if (hasMatchedText && !needsCentering) {
+      // Composite text onto video via per-segment canvas so text inherits exact video lifetime.
+      // Only for static-position segments — animated zoom segments use eval=frame overlay
+      // which requires the variable-sized stream to go directly to the main canvas.
       const textInputIdx = matchedTextInputIdx.get(i)!
       const clipScale = seg.clipScale ?? 1
       const clipX = seg.clipX ?? 0
       const clipY = seg.clipY ?? 0
+      const fullH = Math.round(clipScale * canvas.height / 2) * 2
+      const fullW = Math.round((srcW / srcH) * fullH / 2) * 2
+      const frameCX = (clipX + 1) / 2 * canvas.width
+      const frameCY = (1 - clipY) / 2 * canvas.height
+      const x = Math.round(frameCX - fullW / 2 + cropL * fullW)
+      const y = Math.round(frameCY - fullH / 2 + cropT * fullH)
 
       // Prepare the video stream (crop, scale, fps — no setpts yet)
       filterParts.push(
         `[${i + 1}:v]${cropFilter}${scaleFilter},fps=${FPS}[vprep${i}]`
       )
 
-      // Compute overlay position for placing video on canvas-sized background
-      let overlayExpr: string
-      if (needsCentering) {
-        const userOffsetX = Math.round((clipX + 1) / 2 * canvas.width - canvas.width / 2)
-        const userOffsetY = Math.round((1 - clipY) / 2 * canvas.height - canvas.height / 2)
-        overlayExpr = `overlay=x='(W-w)/2+${userOffsetX}':y='(H-h)/2+${userOffsetY}':eval=frame:eof_action=endall`
-      } else {
-        const fullH = Math.round(clipScale * canvas.height / 2) * 2
-        const fullW = Math.round((srcW / srcH) * fullH / 2) * 2
-        const frameCX = (clipX + 1) / 2 * canvas.width
-        const frameCY = (1 - clipY) / 2 * canvas.height
-        const x = Math.round(frameCX - fullW / 2 + cropL * fullW)
-        const y = Math.round(frameCY - fullH / 2 + cropT * fullH)
-        overlayExpr = `overlay=${x}:${y}:eof_action=endall`
-      }
-
       // Per-segment canvas background → overlay video (eof_action=endall makes it finite)
       // → overlay text PNG → position on timeline
       filterParts.push(
         `color=c=black:s=${canvas.width}x${canvas.height}:r=${FPS}[bg${i}]`,
-        `[bg${i}][vprep${i}]${overlayExpr}[vpos${i}]`,
+        `[bg${i}][vprep${i}]overlay=${x}:${y}:eof_action=endall[vpos${i}]`,
         `[vpos${i}][${textInputIdx}:v]overlay=0:0[vtxt${i}]`,
         `[vtxt${i}]setpts=PTS-STARTPTS+${outStart}/TB[sv${i}]`
       )
+    } else if (hasMatchedText && needsCentering) {
+      // Animated zoom + text: use original video pipeline, move text to unmatched
+      // (per-segment canvas compositing causes jitter with variable-sized frames)
+      const ptsShift = `setpts=PTS-STARTPTS+${outStart}/TB`
+      filterParts.push(
+        `[${i + 1}:v]${cropFilter}${scaleFilter},fps=${FPS},${ptsShift}[sv${i}]`
+      )
+      // Demote this text to the unmatched path (enable expression fallback)
+      const ti = textMatchedToVideo.get(i)!
+      unmatchedTextIdxs.push(ti)
+      unmatchedTextInputIdx.set(ti, matchedTextInputIdx.get(i)!)
+      textMatchedToVideo.delete(i)
     } else {
       // No matched text — original pipeline: crop, scale, fps, setpts
       const ptsShift = `setpts=PTS-STARTPTS+${outStart}/TB`
