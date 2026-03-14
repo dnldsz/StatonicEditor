@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { loadConfig } from './config.js'
+import { loadConfig, saveConfig } from './config.js'
 import { cmdProjectRead, cmdProjectList, cmdProjectWrite, cmdProjectExport } from './commands/project.js'
 import { cmdSegmentUpdate, cmdSegmentDelete, cmdSegmentAddText, cmdSegmentAddZoom } from './commands/segment.js'
 import { cmdPreview, cmdFrames, cmdVideoInfo } from './commands/preview.js'
@@ -154,6 +154,11 @@ async function main(): Promise<void> {
     case 'telegram': return cmdTelegram(args.slice(1))
     case 'migrate': return cmdMigrate()
     case 'config': {
+      if (sub === 'set' && rest[0] && rest[1]) {
+        saveConfig({ [rest[0]]: rest[1] } as any)
+        console.log(`Set ${rest[0]} = ${rest[1]}`)
+        return
+      }
       const config = loadConfig()
       console.log(JSON.stringify(config, null, 2))
       return

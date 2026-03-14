@@ -5,6 +5,7 @@ import { randomBytes } from 'crypto'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { writeFileSync } from 'fs'
+import { loadConfig } from '../config.js'
 
 export function cmdTelegram(args: string[]): void {
   const filePath = args[0]
@@ -15,10 +16,11 @@ export function cmdTelegram(args: string[]): void {
     if (args[i] === '--caption' && args[i + 1]) caption = args[++i]
   }
 
-  const token = process.env.TELEGRAM_BOT_TOKEN
-  const chatId = process.env.TELEGRAM_CHAT_ID
-  if (!token) { console.error('TELEGRAM_BOT_TOKEN env var not set'); process.exit(1) }
-  if (!chatId) { console.error('TELEGRAM_CHAT_ID env var not set'); process.exit(1) }
+  const config = loadConfig()
+  const token = process.env.TELEGRAM_BOT_TOKEN || config.telegramBotToken
+  const chatId = process.env.TELEGRAM_CHAT_ID || config.telegramChatId
+  if (!token) { console.error('No Telegram bot token. Set TELEGRAM_BOT_TOKEN env var or run: statonic config set telegramBotToken <token>'); process.exit(1) }
+  if (!chatId) { console.error('No Telegram chat ID. Set TELEGRAM_CHAT_ID env var or run: statonic config set telegramChatId <id>'); process.exit(1) }
   if (!existsSync(filePath)) { console.error(`File not found: ${filePath}`); process.exit(1) }
 
   const fileData = readFileSync(filePath)
