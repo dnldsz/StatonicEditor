@@ -136,8 +136,12 @@ function buildDrawtextFilters(
     let dt = `drawtext=text='${esc}':fontsize=${fs}:fontcolor=${col}:x=${xExpr}:y=${lineY}`
     if (fontFile) dt += `:fontfile='${fontFile}'`
     if (t.strokeEnabled) {
-      const bw = Math.max(1, Math.round(fs * (6.9 / 97.0)))
+      // Thinner outline: ~70% of the old value to avoid overpowering the text
+      const bw = Math.max(1, Math.round(fs * (6.9 / 97.0) * 0.7))
       dt += `:bordercolor=${t.strokeColor.replace('#', '0x')}ff:borderw=${bw}`
+    } else {
+      // Subtle border matching text color to mimic browser's heavier font rendering
+      dt += `:bordercolor=${col}:borderw=1`
     }
     if (enable) dt += `:${enable}`
     filters.push(dt)
@@ -227,8 +231,8 @@ export function renderPreview(project: Project, timeSec?: number, outputPath?: s
     cur = out
   }
 
-  // Step 4: scale down for preview
-  fp.push(`${cur}scale=540:-2[out]`)
+  // Step 4: output at full resolution
+  fp.push(`${cur}null[out]`)
 
   const tmp = outputPath ?? join(tmpdir(), `preview_${uid()}.jpg`)
   const r = spawnSync('ffmpeg', [
