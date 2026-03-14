@@ -185,11 +185,10 @@ export function renderPreview(project: Project, timeSec?: number, outputPath?: s
     let dt = `drawtext=text='${esc}':fontsize=${fs}:fontcolor=${col}:x=${xExpr}:y=${py}-th/2`
     if (fontFile) dt += `:fontfile='${fontFile}'`
     if (t.strokeEnabled) {
-      // Match the canvas renderer's stroke width: effectiveSize * (6.9/97.0) * 2.3
-      // But drawtext borderw renders on both sides, canvas lineWidth is total width
-      // Canvas uses paint-order:stroke fill so only outer half shows, then doubles with 2.3x
-      // For drawtext borderw ≈ effectiveSize * (6.9/97.0) * 1.15
-      const bw = Math.max(1, Math.round(fs * (6.9 / 97.0) * 1.15))
+      // Canvas: lineWidth = fs * (6.9/97) * 2.3, but paint-order:stroke fill
+      // hides inner half → visible = lineWidth/2 = fs * 0.0817
+      // FFmpeg borderw = visible border width, so use fs * (6.9/97)
+      const bw = Math.max(1, Math.round(fs * (6.9 / 97.0)))
       dt += `:bordercolor=${t.strokeColor.replace('#', '0x')}ff:borderw=${bw}`
     }
     const out = i === activeText.length - 1 ? '[txtout]' : `[txt${i}]`
@@ -391,7 +390,7 @@ export function exportVideo(
       let dt = `drawtext=text='${esc}':fontsize=${fs}:fontcolor=${col}:x=${xExpr}:y=${py}-th/2:${enable}`
       if (fontFile) dt += `:fontfile='${fontFile}'`
       if (t.strokeEnabled) {
-        const bw = Math.max(1, Math.round(fs * (6.9 / 97.0) * 1.15))
+        const bw = Math.max(1, Math.round(fs * (6.9 / 97.0)))
         dt += `:bordercolor=${t.strokeColor.replace('#', '0x')}ff:borderw=${bw}`
       }
 
