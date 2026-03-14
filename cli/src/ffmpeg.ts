@@ -288,22 +288,26 @@ function getScaleFilter(seg: VideoSegment, outStart: number, canvas: { width: nu
     return { filter: `scale=${visW}:${visH}:force_original_aspect_ratio=disable`, needsCentering: false }
   }
 
-  // Animated zoom: fps=30 FIRST to force constant frame rate (VFR sources cause jitter),
-  // then scale with eval=frame expression + 4px rounding for codec alignment.
+  // Smooth zoom: scale at 4x resolution with eval=frame, overlay on 4x canvas,
+  // then downscale to canvas size. The 4px rounding at 4x = 1px at final res (invisible).
+  const HIRES = 4
+  const hiresW = canvas.width * HIRES
+  const hiresH = canvas.height * HIRES
   const t0 = outStart
   const t1 = outStart + segDuration
-  const cropBaseW = Math.round(baseW * cW)
-  const cropBaseH = Math.round(baseH * cH)
+  const hiresBaseW = baseW * HIRES
+  const hiresBaseH = baseH * HIRES
 
-  const interpW = `${cropBaseW}*(1+${firstKf.scale - 1}+(${lastKf.scale - firstKf.scale})*(t-${t0})/(${t1}-${t0}))`
-  const interpH = `${cropBaseH}*(1+${firstKf.scale - 1}+(${lastKf.scale - firstKf.scale})*(t-${t0})/(${t1}-${t0}))`
+  const interpW = `${hiresBaseW}*(${firstKf.scale}+(${lastKf.scale - firstKf.scale})*(t-${t0})/(${t1}-${t0}))`
+  const interpH = `${hiresBaseH}*(${firstKf.scale}+(${lastKf.scale - firstKf.scale})*(t-${t0})/(${t1}-${t0}))`
   const widthExpr = `4*trunc((${interpW})/4)`
   const heightExpr = `4*trunc((${interpH})/4)`
 
   return {
-    filter: `fps=30,scale=w=${widthExpr}:h=${heightExpr}:eval=frame`,
-    needsCentering: true
-  }
+    filter: `fps=30,scale=w=${widthExpr}:h=${heightExpr}:eval=frame:flags=lanczos`,
+    needsCentering: true,
+    hiresCanvas: { w: hiresW, h: hiresH }
+  } as any
 }
 
 export function exportVideo(
@@ -358,6 +362,8 @@ export function exportVideo(
   const filterParts: string[] = []
 
   // Step 1: crop + scale + fps for each video
+  // Animated zoom segments scale at 4x resolution, overlay on 4x canvas, downscale.
+  const HIRES = 4
   for (let i = 0; i < allVideoSegs.length; i++) {
     const { seg } = allVideoSegs[i]
     const cropL = seg.cropLeft ?? 0, cropR = seg.cropRight ?? 0
@@ -367,11 +373,29 @@ export function exportVideo(
     const hasCrop = cropL > 0 || cropR > 0 || cropT > 0 || cropB > 0
     const cropFilter = hasCrop ? `crop=iw*${cW}:ih*${cH}:iw*${cropL}:ih*${cropT},` : ''
     const outStart = seg.startUs / 1e6
-    const { filter: scaleFilter } = getScaleFilter(seg, outStart, canvas)
+    const result = getScaleFilter(seg, outStart, canvas)
     const ptsShift = `setpts=PTS-STARTPTS+${outStart}/TB`
-    filterParts.push(
-      `[${i + 1}:v]${cropFilter}${scaleFilter},fps=${FPS},${ptsShift}[sv${i}]`
-    )
+
+    if (result.needsCentering && (result as any).hiresCanvas) {
+      // Animated zoom: scale at 4x, overlay on 4x black canvas, downscale to canvas size.
+      // This makes 4px rounding = 1px at final res (invisible).
+      const hc = (result as any).hiresCanvas as { w: number; h: number }
+      const clipX = seg.clipX ?? 0
+      const clipY = seg.clipY ?? 0
+      const userOffsetX = Math.round((clipX + 1) / 2 * hc.w - hc.w / 2)
+      const userOffsetY = Math.round((1 - clipY) / 2 * hc.h - hc.h / 2)
+      const xExpr = `(W-w)/2+${userOffsetX}`
+      const yExpr = `(H-h)/2+${userOffsetY}`
+      filterParts.push(
+        `[${i + 1}:v]${cropFilter}${result.filter},${ptsShift}[sv${i}prep]`,
+        `color=c=black:s=${hc.w}x${hc.h}:r=${FPS}:d=${totalDuration}[hibg${i}]`,
+        `[hibg${i}][sv${i}prep]overlay=x='${xExpr}':y='${yExpr}':eval=frame:eof_action=pass,scale=${canvas.width}:${canvas.height}:flags=lanczos[sv${i}]`
+      )
+    } else {
+      filterParts.push(
+        `[${i + 1}:v]${cropFilter}${result.filter},fps=${FPS},${ptsShift}[sv${i}]`
+      )
+    }
   }
 
   // Step 2: overlay chain
@@ -379,23 +403,21 @@ export function exportVideo(
   for (let i = 0; i < allVideoSegs.length; i++) {
     const { seg } = allVideoSegs[i]
     const outLabel = i === allVideoSegs.length - 1 && allTextSegs.length === 0 ? '[vout]' : `[ov${i}]`
+    const hasAnimatedZoom = seg.scaleKeyframes && seg.scaleKeyframes.length > 0 &&
+      Math.abs(seg.scaleKeyframes[0].scale - seg.scaleKeyframes[seg.scaleKeyframes.length - 1].scale) >= 0.01
 
-    const clipScale = seg.clipScale ?? 1
-    const clipX = seg.clipX ?? 0
-    const clipY = seg.clipY ?? 0
-    const srcW = seg.sourceWidth ?? canvas.width
-    const srcH = seg.sourceHeight ?? canvas.height
-    const cropL = seg.cropLeft ?? 0, cropT = seg.cropTop ?? 0
-
-    if (seg.scaleKeyframes && seg.scaleKeyframes.length > 0) {
-      const userOffsetX = Math.round((clipX + 1) / 2 * canvas.width - canvas.width / 2)
-      const userOffsetY = Math.round((1 - clipY) / 2 * canvas.height - canvas.height / 2)
-      const xExpr = `(W-w)/2+${userOffsetX}`
-      const yExpr = `(H-h)/2+${userOffsetY}`
+    if (hasAnimatedZoom) {
+      // Already canvas-sized from hires pipeline
       filterParts.push(
-        `${currentIn}[sv${i}]overlay=x='${xExpr}':y='${yExpr}':eval=frame:eof_action=pass${outLabel}`
+        `${currentIn}[sv${i}]overlay=0:0:eof_action=pass${outLabel}`
       )
     } else {
+      const clipScale = seg.clipScale ?? 1
+      const clipX = seg.clipX ?? 0
+      const clipY = seg.clipY ?? 0
+      const srcW = seg.sourceWidth ?? canvas.width
+      const srcH = seg.sourceHeight ?? canvas.height
+      const cropL = seg.cropLeft ?? 0, cropT = seg.cropTop ?? 0
       const fullH = Math.round(clipScale * canvas.height / 2) * 2
       const fullW = Math.round((srcW / srcH) * fullH / 2) * 2
       const x = Math.round((clipX + 1) / 2 * canvas.width - fullW / 2 + cropL * fullW)
