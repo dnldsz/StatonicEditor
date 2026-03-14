@@ -122,11 +122,15 @@ export interface SceneInfo {
   start: number
   end: number
   duration: number
+  text?: string        // OCR-detected text overlay
+  cuts?: number        // number of visual cuts within this logical scene
 }
 
 export interface SceneData {
-  scenes: SceneInfo[]
+  scenes: SceneInfo[]           // logical scenes (merged by shared text)
+  raw_cuts: SceneInfo[]         // raw visual cuts from FFmpeg
   total_scenes: number
+  total_cuts: number
   total_duration: number
   avg_scene_duration: number
   hook_duration: number

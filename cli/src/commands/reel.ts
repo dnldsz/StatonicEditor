@@ -152,7 +152,7 @@ export function cmdReelDetect(args: string[]): void {
     saveIndex(index)
   }
 
-  console.log(`\nScenes: ${sceneData.total_scenes}`)
+  console.log(`\nScenes: ${sceneData.total_scenes} (from ${sceneData.total_cuts} visual cuts)`)
   console.log(`Duration: ${sceneData.total_duration}s`)
   console.log(`Hook: ${sceneData.hook_duration}s`)
   console.log(`Avg scene: ${sceneData.avg_scene_duration}s`)
@@ -161,7 +161,9 @@ export function cmdReelDetect(args: string[]): void {
   for (let i = 0; i < sceneData.scenes.length; i++) {
     const s = sceneData.scenes[i]
     const label = i === 0 ? ' (hook)' : ''
-    console.log(`  [${i}] ${s.start.toFixed(2)}s → ${s.end.toFixed(2)}s  (${s.duration.toFixed(2)}s)${label}`)
+    const cutsNote = s.cuts ? ` [${s.cuts} cuts]` : ''
+    const textNote = s.text ? `  "${s.text.slice(0, 50)}"` : ''
+    console.log(`  [${i}] ${s.start.toFixed(2)}s → ${s.end.toFixed(2)}s  (${s.duration.toFixed(2)}s)${label}${cutsNote}${textNote}`)
   }
 }
 
@@ -405,7 +407,7 @@ export function cmdReelInspect(args: string[]): void {
 
   if (existsSync(scenesPath)) {
     const data: SceneData = JSON.parse(readFileSync(scenesPath, 'utf-8'))
-    console.log(`\nScenes: ${data.total_scenes}`)
+    console.log(`\nScenes: ${data.total_scenes}${data.total_cuts ? ` (from ${data.total_cuts} visual cuts)` : ''}`)
     console.log(`Hook: ${data.hook_duration}s`)
     console.log(`Body avg: ${data.body_avg_duration}s`)
     console.log(`Cuts/sec: ${data.cuts_per_second}`)
@@ -413,7 +415,9 @@ export function cmdReelInspect(args: string[]): void {
     for (let i = 0; i < data.scenes.length; i++) {
       const s = data.scenes[i]
       const label = i === 0 ? ' (hook)' : ''
-      console.log(`  [${i}] ${s.start.toFixed(2)}s → ${s.end.toFixed(2)}s  (${s.duration.toFixed(2)}s)${label}`)
+      const cutsNote = s.cuts ? ` [${s.cuts} cuts]` : ''
+      const textNote = s.text ? `  "${s.text.slice(0, 50)}"` : ''
+      console.log(`  [${i}] ${s.start.toFixed(2)}s → ${s.end.toFixed(2)}s  (${s.duration.toFixed(2)}s)${label}${cutsNote}${textNote}`)
     }
 
     // Show keyframe paths
