@@ -4,7 +4,7 @@ import { spawnSync } from 'child_process'
 import { getReelsDir } from '../config.js'
 import { getVideoInfo } from '../ffmpeg.js'
 import { detectScenes, extractSceneKeyframes } from '../scene-detect.js'
-import type { ReelMetadata, SceneData, ReelIndexEntry } from '../types.js'
+import type { ReelMetadata, SceneData, ReelIndexEntry, ReelAnalysis } from '../types.js'
 
 function getReelDir(id: string): string {
   return join(getReelsDir(), id)
@@ -152,19 +152,86 @@ export function cmdReelDetect(args: string[]): void {
     saveIndex(index)
   }
 
-  console.log(`\nScenes: ${sceneData.total_scenes} (from ${sceneData.total_cuts} visual cuts)`)
+  console.log(`\nCuts: ${sceneData.total_cuts}`)
   console.log(`Duration: ${sceneData.total_duration}s`)
-  console.log(`Hook: ${sceneData.hook_duration}s`)
-  console.log(`Avg scene: ${sceneData.avg_scene_duration}s`)
   console.log(`Cuts/sec: ${sceneData.cuts_per_second}`)
 
   for (let i = 0; i < sceneData.scenes.length; i++) {
     const s = sceneData.scenes[i]
-    const label = i === 0 ? ' (hook)' : ''
-    const cutsNote = s.cuts ? ` [${s.cuts} cuts]` : ''
-    const textNote = s.text ? `  "${s.text.slice(0, 50)}"` : ''
-    console.log(`  [${i}] ${s.start.toFixed(2)}s → ${s.end.toFixed(2)}s  (${s.duration.toFixed(2)}s)${label}${cutsNote}${textNote}`)
+    console.log(`  [${i}] ${s.start.toFixed(2)}s → ${s.end.toFixed(2)}s  (${s.duration.toFixed(2)}s)`)
   }
+
+  console.log(`\nKeyframes: ${kfDir}/`)
+  console.log('Run "statonic reel analyze ' + (target.includes('/') ? '<id>' : target) + '" to get Claude\'s structural analysis.')
+}
+
+// ── Analyze ─────────────────────────────────────────────────────────────────
+
+export function cmdReelAnalyze(args: string[]): void {
+  const id = args[0]
+  if (!id) {
+    console.error('Usage: statonic reel analyze <id> [--json <analysis-json>]')
+    process.exit(1)
+  }
+
+  const reelDir = getReelDir(id)
+  if (!existsSync(reelDir)) {
+    console.error(`Reel not found: ${id}`)
+    process.exit(1)
+  }
+
+  // Check if analysis JSON is being piped in (from Claude)
+  let analysisJson = ''
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === '--json' && args[i + 1]) analysisJson = args[++i]
+  }
+
+  if (analysisJson) {
+    // Save Claude's analysis
+    const analysis: ReelAnalysis = JSON.parse(analysisJson)
+    writeFileSync(join(reelDir, 'analysis.json'), JSON.stringify(analysis, null, 2))
+    console.log(`Saved analysis for ${id}`)
+    console.log(`Structure: ${analysis.structure_summary}`)
+    console.log(`Hook type: ${analysis.hook_type} (${analysis.hook_duration}s)`)
+    if (analysis.persistent_text.length > 0) {
+      console.log(`Persistent text: "${analysis.persistent_text.join('", "')}"`)
+    }
+    return
+  }
+
+  // Output scene data + keyframe paths for Claude to analyze
+  const scenesPath = join(reelDir, 'scenes.json')
+  const metaPath = join(reelDir, 'metadata.json')
+  const kfDir = join(reelDir, 'keyframes')
+
+  if (!existsSync(scenesPath)) {
+    console.error(`No scene detection for ${id}. Run: statonic reel detect ${id}`)
+    process.exit(1)
+  }
+
+  const sceneData: SceneData = JSON.parse(readFileSync(scenesPath, 'utf-8'))
+  const meta: ReelMetadata = existsSync(metaPath)
+    ? JSON.parse(readFileSync(metaPath, 'utf-8'))
+    : null
+
+  if (meta) {
+    console.log(`Reel: ${meta.id} (${meta.views.toLocaleString()} views, ${meta.duration}s)`)
+  }
+
+  console.log(`\nVisual cuts: ${sceneData.total_cuts}`)
+  for (let i = 0; i < sceneData.raw_cuts.length; i++) {
+    const s = sceneData.raw_cuts[i]
+    console.log(`  [${i}] ${s.start.toFixed(2)}s → ${s.end.toFixed(2)}s  (${s.duration.toFixed(2)}s)`)
+  }
+
+  if (existsSync(kfDir)) {
+    const kfs = readdirSync(kfDir).filter(f => f.endsWith('.jpg')).sort()
+    console.log(`\nKeyframes (${kfs.length}):`)
+    for (const kf of kfs) console.log(`  ${join(kfDir, kf)}`)
+  }
+
+  console.log(`\nTo analyze: have Claude read the keyframes above and write analysis.json.`)
+  console.log(`Save with: statonic reel analyze ${id} --json '<analysis>'`)
 }
 
 // ── Batch ───────────────────────────────────────────────────────────────────
@@ -405,22 +472,37 @@ export function cmdReelInspect(args: string[]): void {
     console.log(`Resolution: ${meta.width}x${meta.height}`)
   }
 
-  if (existsSync(scenesPath)) {
+  // Show Claude's analysis if available
+  const analysisPath = join(reelDir, 'analysis.json')
+  if (existsSync(analysisPath)) {
+    const analysis: ReelAnalysis = JSON.parse(readFileSync(analysisPath, 'utf-8'))
+    console.log(`\nStructure: ${analysis.structure_summary}`)
+    console.log(`Hook type: ${analysis.hook_type} (${analysis.hook_duration}s)`)
+    if (analysis.persistent_text.length > 0) {
+      console.log(`Persistent text: "${analysis.persistent_text.join('", "')}"`)
+    }
+    console.log('')
+    for (let i = 0; i < analysis.logical_scenes.length; i++) {
+      const s = analysis.logical_scenes[i]
+      const cutsNote = s.cuts > 1 ? ` [${s.cuts} cuts]` : ''
+      const persistNote = s.persistent_text ? ' (persistent)' : ''
+      console.log(`  [${i}] ${s.start.toFixed(2)}s → ${s.end.toFixed(2)}s  (${s.duration.toFixed(2)}s)${cutsNote}`)
+      if (s.text_overlay.length > 0) {
+        console.log(`       text: "${s.text_overlay.join('", "')}"${persistNote}`)
+      }
+      console.log(`       visual: ${s.visual_description}`)
+    }
+    if (analysis.notes) console.log(`\nNotes: ${analysis.notes}`)
+  } else if (existsSync(scenesPath)) {
     const data: SceneData = JSON.parse(readFileSync(scenesPath, 'utf-8'))
-    console.log(`\nScenes: ${data.total_scenes}${data.total_cuts ? ` (from ${data.total_cuts} visual cuts)` : ''}`)
-    console.log(`Hook: ${data.hook_duration}s`)
-    console.log(`Body avg: ${data.body_avg_duration}s`)
+    console.log(`\nVisual cuts: ${data.total_cuts}`)
     console.log(`Cuts/sec: ${data.cuts_per_second}`)
     console.log('')
     for (let i = 0; i < data.scenes.length; i++) {
       const s = data.scenes[i]
-      const label = i === 0 ? ' (hook)' : ''
-      const cutsNote = s.cuts ? ` [${s.cuts} cuts]` : ''
-      const textNote = s.text ? `  "${s.text.slice(0, 50)}"` : ''
-      console.log(`  [${i}] ${s.start.toFixed(2)}s → ${s.end.toFixed(2)}s  (${s.duration.toFixed(2)}s)${label}${cutsNote}${textNote}`)
+      console.log(`  [${i}] ${s.start.toFixed(2)}s → ${s.end.toFixed(2)}s  (${s.duration.toFixed(2)}s)`)
     }
 
-    // Show keyframe paths
     const kfDir = join(reelDir, 'keyframes')
     if (existsSync(kfDir)) {
       const kfs = readdirSync(kfDir).filter(f => f.endsWith('.jpg')).sort()
@@ -429,6 +511,7 @@ export function cmdReelInspect(args: string[]): void {
         for (const kf of kfs) console.log(`  ${kf}`)
       }
     }
+    console.log('\nRun "statonic reel analyze ' + id + '" for Claude\'s structural analysis.')
   } else {
     console.log('\nNo scene detection yet. Run: statonic reel detect ' + id)
   }

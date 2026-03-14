@@ -12,7 +12,7 @@ import { cmdHookGenerate, cmdHookLearn } from './commands/hook.js'
 import { cmdVariationCreate } from './commands/variation.js'
 import { cmdMigrate } from './commands/migrate.js'
 import { cmdTelegram } from './commands/telegram.js'
-import { cmdReelDownload, cmdReelDetect, cmdReelBatch, cmdReelInspect, cmdReelInsights, cmdReelTop } from './commands/reel.js'
+import { cmdReelDownload, cmdReelDetect, cmdReelAnalyze, cmdReelBatch, cmdReelInspect, cmdReelInsights, cmdReelTop } from './commands/reel.js'
 
 const HELP = `statonic — headless video editor CLI
 
@@ -64,6 +64,7 @@ ACCOUNTS:
 REEL ANALYSIS:
   reel download <url> [--views <n>] [--company <name>]
   reel detect <id-or-path> [--threshold <0.3>]
+  reel analyze <id> [--json '<analysis>']
   reel batch <csv-or-xlsx> [--limit <n>] [--min-views <n>] [--company <name>]
   reel inspect <id>
   reel insights
@@ -164,6 +165,7 @@ async function main(): Promise<void> {
       switch (sub) {
         case 'download': return cmdReelDownload(rest)
         case 'detect': return cmdReelDetect(rest)
+        case 'analyze': return cmdReelAnalyze(rest)
         case 'batch': return cmdReelBatch(rest)
         case 'inspect': return cmdReelInspect(rest)
         case 'insights': return cmdReelInsights(rest)

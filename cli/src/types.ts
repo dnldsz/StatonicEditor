@@ -122,13 +122,11 @@ export interface SceneInfo {
   start: number
   end: number
   duration: number
-  text?: string        // OCR-detected text overlay
-  cuts?: number        // number of visual cuts within this logical scene
 }
 
 export interface SceneData {
-  scenes: SceneInfo[]           // logical scenes (merged by shared text)
-  raw_cuts: SceneInfo[]         // raw visual cuts from FFmpeg
+  scenes: SceneInfo[]           // raw visual cuts from FFmpeg
+  raw_cuts: SceneInfo[]         // same as scenes (before analysis)
   total_scenes: number
   total_cuts: number
   total_duration: number
@@ -136,6 +134,27 @@ export interface SceneData {
   hook_duration: number
   body_avg_duration: number
   cuts_per_second: number
+}
+
+/** Claude's analysis of a reel's structure — stored in analysis.json */
+export interface ReelAnalysis {
+  logical_scenes: LogicalScene[]
+  hook_type: string             // e.g. "comparison", "listicle", "question", "statement"
+  hook_duration: number
+  persistent_text: string[]     // text that stays across multiple scenes
+  total_logical_scenes: number
+  structure_summary: string     // e.g. "1 hook (3 cuts) + 4 showcase clips"
+  notes: string                 // any other observations
+}
+
+export interface LogicalScene {
+  start: number
+  end: number
+  duration: number
+  cuts: number                  // visual cuts within this logical scene
+  text_overlay: string[]        // text visible in this scene
+  persistent_text: boolean      // true if text carries over from previous scene
+  visual_description: string    // what's shown (e.g. "overhead desk shot, writing")
 }
 
 export interface ReelIndexEntry {
