@@ -352,9 +352,12 @@ export function exportVideo(
     '-f', 'lavfi', '-i', `color=c=black:s=${canvas.width}x${canvas.height}:r=${FPS}:d=${totalDuration}`
   ]
   for (const { seg } of allVideoSegs) {
+    // Add 1 frame of padding to source duration to handle non-frame-aligned durations.
+    // Without this, a 1.46s clip at 30fps decodes 43 frames but the timeline needs 44.
+    const srcDurPadded = seg.sourceDurationUs / 1_000_000 + 1 / FPS
     inputs.push(
       '-ss', String(seg.sourceStartUs / 1_000_000),
-      '-t', String(seg.sourceDurationUs / 1_000_000),
+      '-t', String(srcDurPadded),
       '-i', seg.src
     )
   }
