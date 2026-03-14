@@ -288,24 +288,20 @@ function getScaleFilter(seg: VideoSegment, outStart: number, canvas: { width: nu
     return { filter: `scale=${visW}:${visH}:force_original_aspect_ratio=disable`, needsCentering: false }
   }
 
-  // Smooth zoom using zoompan — fixed output size, no per-frame dimension changes.
-  // zoompan z=1 shows full input, z=1.2 shows 1/1.2 of input (zoomed in).
-  // Our scale keyframes: scale=1.0 = fill canvas, scale=1.2 = 20% bigger (zoom in).
-  // These map directly to zoompan's z factor.
-  const FPS = 30
-  const totalFrames = Math.round(segDuration * FPS)
-  const zStart = firstKf.scale
-  const zEnd = lastKf.scale
-  const zExpr = `${zStart}+(${zEnd}-${zStart})*(on/${Math.max(1, totalFrames - 1)})`
+  // Animated zoom: fps=30 FIRST to force constant frame rate (VFR sources cause jitter),
+  // then scale with eval=frame expression + 4px rounding for codec alignment.
+  const t0 = outStart
+  const t1 = outStart + segDuration
+  const cropBaseW = Math.round(baseW * cW)
+  const cropBaseH = Math.round(baseH * cH)
 
-  // Output size: the visible area at scale=1 (base fill)
-  const outW = Math.round(baseW * cW / 2) * 2
-  const outH = Math.round(baseH * cH / 2) * 2
+  const interpW = `${cropBaseW}*(1+${firstKf.scale - 1}+(${lastKf.scale - firstKf.scale})*(t-${t0})/(${t1}-${t0}))`
+  const interpH = `${cropBaseH}*(1+${firstKf.scale - 1}+(${lastKf.scale - firstKf.scale})*(t-${t0})/(${t1}-${t0}))`
+  const widthExpr = `4*trunc((${interpW})/4)`
+  const heightExpr = `4*trunc((${interpH})/4)`
 
-  // zoompan needs the input scaled so that at z=1, it fills the output.
-  // Scale input to output size first, then zoompan handles the rest.
   return {
-    filter: `scale=${outW}:${outH}:force_original_aspect_ratio=disable,zoompan=z='${zExpr}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=${outW}x${outH}:fps=${FPS}`,
+    filter: `fps=30,scale=w=${widthExpr}:h=${heightExpr}:eval=frame`,
     needsCentering: true
   }
 }
@@ -371,12 +367,10 @@ export function exportVideo(
     const hasCrop = cropL > 0 || cropR > 0 || cropT > 0 || cropB > 0
     const cropFilter = hasCrop ? `crop=iw*${cW}:ih*${cH}:iw*${cropL}:ih*${cropT},` : ''
     const outStart = seg.startUs / 1e6
-    const { filter: scaleFilter, needsCentering } = getScaleFilter(seg, outStart, canvas)
+    const { filter: scaleFilter } = getScaleFilter(seg, outStart, canvas)
     const ptsShift = `setpts=PTS-STARTPTS+${outStart}/TB`
-    // zoompan already handles fps, so skip the fps filter for animated segments
-    const fpsFilter = needsCentering ? '' : `,fps=${FPS}`
     filterParts.push(
-      `[${i + 1}:v]${cropFilter}${scaleFilter}${fpsFilter},${ptsShift}[sv${i}]`
+      `[${i + 1}:v]${cropFilter}${scaleFilter},fps=${FPS},${ptsShift}[sv${i}]`
     )
   }
 
