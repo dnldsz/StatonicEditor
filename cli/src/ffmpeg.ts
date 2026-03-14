@@ -101,8 +101,9 @@ function escapeDrawtext(text: string): string {
     .replace(/%/g, '%%')
 }
 
-// LINE_HEIGHT matches Canvas.tsx lineHeight: 1.05 and renderTextToPng lineHeight = effectiveSize
-const LINE_HEIGHT = 1.05
+// LINE_HEIGHT matches renderTextToPng (export canvas) which uses lineHeight = effectiveSize (1.0)
+// CSS live preview uses 1.05 but the export renderer is what matters for output fidelity
+const LINE_HEIGHT = 1.0
 
 /**
  * Build drawtext filter chain for a text segment, rendering each line separately
