@@ -433,9 +433,12 @@ export function exportVideo(
   if (allTextSegs.length > 0) {
     const allDrawtexts: string[] = []
     for (const { seg: t } of allTextSegs) {
-      const startSec = t.startUs / 1e6
-      const endSec = (t.startUs + t.durationUs) / 1e6
-      const enable = `enable='between(t,${startSec},${endSec})'`
+      // Use frame numbers with between(n, start, end-1) for clean boundaries.
+      // between() is inclusive on both ends, so end-1 means the text disappears
+      // exactly on the frame where the next text starts.
+      const startFrame = Math.round(t.startUs / 1e6 * FPS)
+      const endFrame = Math.round((t.startUs + t.durationUs) / 1e6 * FPS) - 1
+      const enable = `enable='between(n\\,${startFrame}\\,${endFrame})'`
       allDrawtexts.push(...buildDrawtextFilters(t, canvas.width, canvas.height, fontFile, enable))
     }
     for (let i = 0; i < allDrawtexts.length; i++) {
