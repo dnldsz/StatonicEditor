@@ -1,0 +1,17 @@
+{
+  "name": "statonic-cli",
+  "version": "1.0.0",
+  "description": "Headless CLI for Statonic video editor",
+  "type": "module",
+  "bin": {
+    "statonic": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "@types/node": "^22.0.0"
+  }
+}
