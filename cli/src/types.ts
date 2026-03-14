@@ -105,6 +105,43 @@ export interface ClipIndex {
   last_updated: string
 }
 
+// ── Reel analysis types ──────────────────────────────────────────────────────
+
+export interface ReelMetadata {
+  id: string
+  url: string
+  views: number
+  date: string
+  company: string
+  duration: number
+  width: number
+  height: number
+}
+
+export interface SceneInfo {
+  start: number
+  end: number
+  duration: number
+}
+
+export interface SceneData {
+  scenes: SceneInfo[]
+  total_scenes: number
+  total_duration: number
+  avg_scene_duration: number
+  hook_duration: number
+  body_avg_duration: number
+  cuts_per_second: number
+}
+
+export interface ReelIndexEntry {
+  id: string
+  url: string
+  views: number
+  company: string
+  detected: boolean
+}
+
 export interface LibraryClipMeta {
   id: string
   accountId: string

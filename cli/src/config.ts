@@ -70,6 +70,10 @@ export function getHookKnowledgePath(): string {
   return join(getDataDir(), 'hook-knowledge.json')
 }
 
+export function getReelsDir(): string {
+  return join(getDataDir(), 'reels')
+}
+
 export function getActiveAccountId(): string {
   const config = loadConfig()
   if (!config.activeAccountId) {

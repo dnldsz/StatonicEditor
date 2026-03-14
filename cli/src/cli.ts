@@ -12,6 +12,7 @@ import { cmdHookGenerate, cmdHookLearn } from './commands/hook.js'
 import { cmdVariationCreate } from './commands/variation.js'
 import { cmdMigrate } from './commands/migrate.js'
 import { cmdTelegram } from './commands/telegram.js'
+import { cmdReelDownload, cmdReelDetect, cmdReelBatch, cmdReelInspect, cmdReelInsights, cmdReelTop } from './commands/reel.js'
 
 const HELP = `statonic — headless video editor CLI
 
@@ -59,6 +60,14 @@ ACCOUNTS:
   account list
   account set <id>
   account create <name>
+
+REEL ANALYSIS:
+  reel download <url> [--views <n>] [--company <name>]
+  reel detect <id-or-path> [--threshold <0.3>]
+  reel batch <csv-or-xlsx> [--limit <n>] [--min-views <n>] [--company <name>]
+  reel inspect <id>
+  reel insights
+  reel top [--min-views <n>] [--limit <n>]
 
 UTILITY:
   telegram <file-path> [--caption "..."]
@@ -148,6 +157,18 @@ async function main(): Promise<void> {
         case 'set': return cmdAccountSet(rest)
         case 'create': return cmdAccountCreate(rest)
         default: console.error(`Unknown account subcommand: ${sub}`); process.exit(1)
+      }
+      break
+
+    case 'reel':
+      switch (sub) {
+        case 'download': return cmdReelDownload(rest)
+        case 'detect': return cmdReelDetect(rest)
+        case 'batch': return cmdReelBatch(rest)
+        case 'inspect': return cmdReelInspect(rest)
+        case 'insights': return cmdReelInsights(rest)
+        case 'top': return cmdReelTop(rest)
+        default: console.error(`Unknown reel subcommand: ${sub}`); process.exit(1)
       }
       break
 
