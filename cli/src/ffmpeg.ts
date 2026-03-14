@@ -136,12 +136,13 @@ function buildDrawtextFilters(
     let dt = `drawtext=text='${esc}':fontsize=${fs}:fontcolor=${col}:x=${xExpr}:y=${lineY}`
     if (fontFile) dt += `:fontfile='${fontFile}'`
     if (t.strokeEnabled) {
-      // Thinner outline: ~70% of the old value to avoid overpowering the text
-      const bw = Math.max(1, Math.round(fs * (6.9 / 97.0) * 0.7))
+      // Sub-linear scaling: larger text gets proportionally thinner outline
+      // At fs=85 → ~6px, at fs=120 → ~7px (instead of linear ~9px)
+      const bw = Math.max(1, Math.round(Math.sqrt(fs) * 0.55))
       dt += `:bordercolor=${t.strokeColor.replace('#', '0x')}ff:borderw=${bw}`
     } else {
       // Subtle border matching text color to mimic browser's heavier font rendering
-      dt += `:bordercolor=${col}:borderw=1`
+      dt += `:bordercolor=${col}:borderw=2`
     }
     if (enable) dt += `:${enable}`
     filters.push(dt)
@@ -297,8 +298,8 @@ function getScaleFilter(seg: VideoSegment, outStart: number, canvas: { width: nu
 
   const interpW = `${cropBaseW}*(1+${firstKf.scale - 1}+(${lastKf.scale - firstKf.scale})*(t-${t0})/(${t1}-${t0}))`
   const interpH = `${cropBaseH}*(1+${firstKf.scale - 1}+(${lastKf.scale - firstKf.scale})*(t-${t0})/(${t1}-${t0}))`
-  const widthExpr = `4*trunc((${interpW})/4)`
-  const heightExpr = `4*trunc((${interpH})/4)`
+  const widthExpr = `2*trunc((${interpW})/2)`
+  const heightExpr = `2*trunc((${interpH})/2)`
 
   return {
     filter: `scale=w=${widthExpr}:h=${heightExpr}:eval=frame`,
