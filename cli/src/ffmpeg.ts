@@ -101,6 +101,49 @@ function escapeDrawtext(text: string): string {
     .replace(/%/g, '%%')
 }
 
+// LINE_HEIGHT matches Canvas.tsx lineHeight: 1.05 and renderTextToPng lineHeight = effectiveSize
+const LINE_HEIGHT = 1.05
+
+/**
+ * Build drawtext filter chain for a text segment, rendering each line separately
+ * to match the editor's tight line spacing (CSS lineHeight: 1.05).
+ * FFmpeg's built-in \n handling uses the font's line gap which is much larger.
+ */
+function buildDrawtextFilters(
+  t: TextSegment,
+  canvasW: number,
+  canvasH: number,
+  fontFile: string,
+  enable?: string,
+): string[] {
+  const fs = Math.round(t.fontSize * (t.textScale ?? 1))
+  const col = t.color.replace('#', '0x') + 'ff'
+  const px = Math.round((t.x + 1) / 2 * canvasW)
+  const py = Math.round((1 - t.y) / 2 * canvasH)
+  const lines = t.text.split('\n')
+  const lineH = Math.round(fs * LINE_HEIGHT)
+  const totalH = lines.length * lineH
+
+  const filters: string[] = []
+  for (let li = 0; li < lines.length; li++) {
+    if (!lines[li]) continue
+    const esc = escapeDrawtext(lines[li])
+    const xExpr = t.textAlign === 'left' ? `${px}` : t.textAlign === 'right' ? `${px}-tw` : `${px}-tw/2`
+    // Center of this line: py - totalH/2 + lineH * (li + 0.5) - th/2 for drawtext y
+    const lineY = py - Math.round(totalH / 2) + Math.round(lineH * li)
+
+    let dt = `drawtext=text='${esc}':fontsize=${fs}:fontcolor=${col}:x=${xExpr}:y=${lineY}`
+    if (fontFile) dt += `:fontfile='${fontFile}'`
+    if (t.strokeEnabled) {
+      const bw = Math.max(1, Math.round(fs * (6.9 / 97.0)))
+      dt += `:bordercolor=${t.strokeColor.replace('#', '0x')}ff:borderw=${bw}`
+    }
+    if (enable) dt += `:${enable}`
+    filters.push(dt)
+  }
+  return filters
+}
+
 export function renderPreview(project: Project, timeSec?: number, outputPath?: string): string {
   const { canvas, tracks } = project
 
@@ -171,28 +214,15 @@ export function renderPreview(project: Project, timeSec?: number, outputPath?: s
     cur = out
   }
 
-  // Step 3: drawtext for each text segment (using export-quality font + stroke)
+  // Step 3: drawtext for each text segment — one filter per line for correct spacing
   const fontFile = getFontFile()
-  for (let i = 0; i < activeText.length; i++) {
-    const t = activeText[i]
-    const px = Math.round((t.x + 1) / 2 * canvas.width)
-    const py = Math.round((1 - t.y) / 2 * canvas.height)
-    const fs = Math.round(t.fontSize * (t.textScale ?? 1))
-    const col = t.color.replace('#', '0x') + 'ff'
-    const esc = escapeDrawtext(t.text)
-    const xExpr = t.textAlign === 'left' ? `${px}` : t.textAlign === 'right' ? `${px}-tw` : `${px}-tw/2`
-
-    let dt = `drawtext=text='${esc}':fontsize=${fs}:fontcolor=${col}:x=${xExpr}:y=${py}-th/2`
-    if (fontFile) dt += `:fontfile='${fontFile}'`
-    if (t.strokeEnabled) {
-      // Canvas: lineWidth = fs * (6.9/97) * 2.3, but paint-order:stroke fill
-      // hides inner half → visible = lineWidth/2 = fs * 0.0817
-      // FFmpeg borderw = visible border width, so use fs * (6.9/97)
-      const bw = Math.max(1, Math.round(fs * (6.9 / 97.0)))
-      dt += `:bordercolor=${t.strokeColor.replace('#', '0x')}ff:borderw=${bw}`
-    }
-    const out = i === activeText.length - 1 ? '[txtout]' : `[txt${i}]`
-    fp.push(`${cur}${dt}${out}`)
+  const allDrawtexts: string[] = []
+  for (const t of activeText) {
+    allDrawtexts.push(...buildDrawtextFilters(t, canvas.width, canvas.height, fontFile))
+  }
+  for (let i = 0; i < allDrawtexts.length; i++) {
+    const out = i === allDrawtexts.length - 1 ? '[txtout]' : `[txt${i}]`
+    fp.push(`${cur}${allDrawtexts[i]}${out}`)
     cur = out
   }
 
@@ -372,30 +402,18 @@ export function exportVideo(
     currentIn = outLabel
   }
 
-  // Step 3: drawtext for text segments (replaces PNG overlay approach)
+  // Step 3: drawtext for text segments — one filter per line for correct spacing
   if (allTextSegs.length > 0) {
-    for (let i = 0; i < allTextSegs.length; i++) {
-      const { seg: t } = allTextSegs[i]
-      const px = Math.round((t.x + 1) / 2 * canvas.width)
-      const py = Math.round((1 - t.y) / 2 * canvas.height)
-      const fs = Math.round(t.fontSize * (t.textScale ?? 1))
-      const col = t.color.replace('#', '0x') + 'ff'
-      const esc = escapeDrawtext(t.text)
-      const xExpr = t.textAlign === 'left' ? `${px}` : t.textAlign === 'right' ? `${px}-tw` : `${px}-tw/2`
-
+    const allDrawtexts: string[] = []
+    for (const { seg: t } of allTextSegs) {
       const startSec = t.startUs / 1e6
       const endSec = (t.startUs + t.durationUs) / 1e6
       const enable = `enable='between(t,${startSec},${endSec})'`
-
-      let dt = `drawtext=text='${esc}':fontsize=${fs}:fontcolor=${col}:x=${xExpr}:y=${py}-th/2:${enable}`
-      if (fontFile) dt += `:fontfile='${fontFile}'`
-      if (t.strokeEnabled) {
-        const bw = Math.max(1, Math.round(fs * (6.9 / 97.0)))
-        dt += `:bordercolor=${t.strokeColor.replace('#', '0x')}ff:borderw=${bw}`
-      }
-
-      const outLabel = i === allTextSegs.length - 1 ? '[vout]' : `[dt${i}]`
-      filterParts.push(`${currentIn}${dt}${outLabel}`)
+      allDrawtexts.push(...buildDrawtextFilters(t, canvas.width, canvas.height, fontFile, enable))
+    }
+    for (let i = 0; i < allDrawtexts.length; i++) {
+      const outLabel = i === allDrawtexts.length - 1 ? '[vout]' : `[dt${i}]`
+      filterParts.push(`${currentIn}${allDrawtexts[i]}${outLabel}`)
       currentIn = outLabel
     }
   } else if (allVideoSegs.length > 0) {
